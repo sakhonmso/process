@@ -537,5 +537,3 @@ async function main() {
 }
 
 main().catch(err => { console.error('\nFatal:', err.stack ?? err); process.exit(1); });
-
-const a = 1
