@@ -1,10 +1,10 @@
 {
-  "name": "p4p-excel-merge",
+  "name": "p4p-process",
   "version": "1.0.0",
-  "description": "P4P physician workload Excel merge pipeline — Google Drive + Supabase",
-  "main": "p4p_merge.js",
+  "description": "P4P physician workload Excel merge pipeline \u2014 Google Drive + Supabase",
+  "main": "process.js",
   "scripts": {
-    "start": "node p4p_merge.js"
+    "start": "node process.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",

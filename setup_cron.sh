@@ -22,7 +22,7 @@ LOG_FILE="${SCRIPT_DIR}/logs/p4p_merge.log"
 mkdir -p "${SCRIPT_DIR}/logs"
 
 # Cron entry — runs every day at RUN_HOUR:RUN_MIN
-CRON_CMD="${RUN_MIN} ${RUN_HOUR} * * * cd \"${SCRIPT_DIR}\" && \"${NODE_BIN}\" p4p_merge.js >> \"${LOG_FILE}\" 2>&1"
+CRON_CMD="${RUN_MIN} ${RUN_HOUR} * * * cd \"${SCRIPT_DIR}\" && \"${NODE_BIN}\" process.js >> \"${LOG_FILE}\" 2>&1"
 
 echo ""
 echo "──────────────────────────────────────────────────────────"
@@ -36,9 +36,9 @@ echo "────────────────────────�
 echo ""
 
 # Check if entry already exists
-if crontab -l 2>/dev/null | grep -qF "p4p_merge.js"; then
-  echo "⚠  A cron job for p4p_merge.js already exists:"
-  crontab -l 2>/dev/null | grep "p4p_merge.js"
+if crontab -l 2>/dev/null | grep -qF "process.js"; then
+  echo "⚠  A cron job for process.js already exists:"
+  crontab -l 2>/dev/null | grep "process.js"
   echo ""
   read -rp "Replace it? [y/N] " confirm
   if [[ "${confirm,,}" != "y" ]]; then
@@ -46,7 +46,7 @@ if crontab -l 2>/dev/null | grep -qF "p4p_merge.js"; then
     exit 0
   fi
   # Remove existing entry
-  crontab -l 2>/dev/null | grep -vF "p4p_merge.js" | crontab -
+  crontab -l 2>/dev/null | grep -vF "process.js" | crontab -
 fi
 
 # Append new cron entry

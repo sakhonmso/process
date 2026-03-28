@@ -33,7 +33,7 @@ jobs:
           GOOGLE_OUTPUT_FOLDER_ID: ${{ secrets.GOOGLE_OUTPUT_FOLDER_ID }}
           SUPABASE_URL:           ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY:           ${{ secrets.SUPABASE_KEY }}
-        run: node p4p_merge.js
+        run: node process.js
 
       - name: Upload run log as artifact
         if: always()
