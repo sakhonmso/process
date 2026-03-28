@@ -1,4 +1,4 @@
-name: P4P Excel Merge
+name: process
 
 on:
   schedule:
