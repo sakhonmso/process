@@ -932,6 +932,8 @@ async function createSK03(drive, sheets, supabasePersons, monthKey, supabase) {
   await sheets.spreadsheets.batchUpdate({ spreadsheetId: ssId, requestBody: { requests: [
     { updateSheetProperties: { properties: { sheetId: staffSheetId, title: staffSheetName }, fields: 'title' } },
     ...(defaultSheetId != null ? [{ deleteSheet: { sheetId: defaultSheetId } }] : []),
+    // Extend grid immediately — data rows + totals + 6 blanks + 2 sig rows must all fit
+    { appendDimension: { sheetId: staffSheetId, dimension: 'ROWS', length: 50 } },
   ]}});
 
   // A3 header
@@ -950,14 +952,6 @@ async function createSK03(drive, sheets, supabasePersons, monthKey, supabase) {
   // Totals row: N and O = SUM of all persons, red background
   const staffTotalRow = staffLastRow + 1;
   const RED = { red: 0.933, green: 0.294, blue: 0.169 }; // #EE4B2B
-
-  // Extend the sheet so the totals row and signature rows fit beyond the template's grid
-  await sheets.spreadsheets.batchUpdate({
-    spreadsheetId: ssId,
-    requestBody: { requests: [{
-      appendDimension: { sheetId: staffSheetId, dimension: 'ROWS', length: 20 },
-    }]},
-  });
 
   await sheets.spreadsheets.values.update({
     spreadsheetId: ssId,
@@ -996,6 +990,8 @@ async function createSK03(drive, sheets, supabasePersons, monthKey, supabase) {
 
   await sheets.spreadsheets.batchUpdate({ spreadsheetId: ssId, requestBody: { requests: [
     { updateSheetProperties: { properties: { sheetId: internSheetId, title: internSheetName }, fields: 'title' } },
+    // Extend grid before any data writing
+    { appendDimension: { sheetId: internSheetId, dimension: 'ROWS', length: 50 } },
   ]}});
 
   await sheets.spreadsheets.values.update({ spreadsheetId: ssId, range: `'${internSheetName}'!A3`, valueInputOption: 'RAW', requestBody: { values: [[`ประจำเดือน  ${THAI_MONTHS[month]}  พ.ศ.  ${beYear}`]] } });
@@ -1008,14 +1004,6 @@ async function createSK03(drive, sheets, supabasePersons, monthKey, supabase) {
 
   await writeOverallMeta(sheets, ssId, internSheetName, internLastRow, true, internSheetName);
   await formatOverallSheet(sheets, ssId, internSheetId, internArray, internLastRow, true);
-
-  // Extend intern sheet grid before writing signature rows
-  await sheets.spreadsheets.batchUpdate({
-    spreadsheetId: ssId,
-    requestBody: { requests: [{
-      appendDimension: { sheetId: internSheetId, dimension: 'ROWS', length: 20 },
-    }]},
-  });
 
   await writeOverallSignature(sheets, ssId, internSheetName, internSheetId, internLastRow);
 
