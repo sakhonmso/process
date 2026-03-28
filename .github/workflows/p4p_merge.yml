@@ -1,0 +1,46 @@
+name: P4P Excel Merge
+
+on:
+  schedule:
+    # Runs every day at 00:00 UTC (07:00 Bangkok time, UTC+7)
+    - cron: '0 0 * * *'
+  workflow_dispatch: # allow manual trigger from GitHub UI
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run P4P merge pipeline
+        env:
+          GOOGLE_CLIENT_ID:       ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET:   ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_REFRESH_TOKEN:   ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+          GOOGLE_ROOT_FOLDER_ID:  ${{ secrets.GOOGLE_ROOT_FOLDER_ID }}
+          GOOGLE_OUTPUT_FOLDER_ID: ${{ secrets.GOOGLE_OUTPUT_FOLDER_ID }}
+          SUPABASE_URL:           ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY:           ${{ secrets.SUPABASE_KEY }}
+        run: node p4p_merge.js
+
+      - name: Upload run log as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-log-${{ github.run_number }}
+          path: |
+            *.log
+          if-no-files-found: ignore
+          retention-days: 30

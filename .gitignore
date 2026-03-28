@@ -1,0 +1,13 @@
+# Dependencies
+node_modules/
+
+# Environment — NEVER commit real credentials
+.env
+
+# Logs
+logs/
+*.log
+
+# OS noise
+.DS_Store
+Thumbs.db
