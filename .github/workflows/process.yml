@@ -7,7 +7,7 @@ on:
   workflow_dispatch: # allow manual trigger from GitHub UI
 
 jobs:
-  merge:
+  process:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 

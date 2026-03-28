@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────
 #  setup_cron.sh
-#  Installs a daily cron job for the P4P Excel Merge Pipeline.
+#  Installs a daily cron job for the Process Pipeline.
 #  Run once: bash setup_cron.sh
 # ─────────────────────────────────────────────────────────────────
 
@@ -15,7 +15,7 @@ RUN_MIN=0
 # Resolve absolute path of this script's directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NODE_BIN="$(command -v node)"
-LOG_FILE="${SCRIPT_DIR}/logs/p4p_merge.log"
+LOG_FILE="${SCRIPT_DIR}/logs/process.log"
 # ─────────────────────────────────────────────────────────────────
 
 # Create logs directory if missing
@@ -26,7 +26,7 @@ CRON_CMD="${RUN_MIN} ${RUN_HOUR} * * * cd \"${SCRIPT_DIR}\" && \"${NODE_BIN}\" p
 
 echo ""
 echo "──────────────────────────────────────────────────────────"
-echo "  P4P Merge — Cron Job Installer"
+echo "  Process Pipeline — Cron Job Installer"
 echo "──────────────────────────────────────────────────────────"
 echo "  Script dir : ${SCRIPT_DIR}"
 echo "  Node binary: ${NODE_BIN}"
