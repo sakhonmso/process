@@ -71,6 +71,41 @@ const DEPT_COLORS = {
   'อายุรกรรม':                              '#A3DDBD',
   'INTERN':                               '#ECC1D1',
 };
+// ─── Management allowance data ───────────────────────────────────
+// Key: firstname + " " + lastname (no prefix). Provides col I (staff) and col E + I (dept).
+const MANAGEMENT_DATA = [
+  { name: 'ศิริพันธ์ บุญโต',             remark: 'รองผู้อำนวยการ',      amount: 7000 },
+  { name: 'นิธินันท์ สร้อยอากาศ',         remark: 'หัวหน้ากลุ่มงาน',     amount: 1000 },
+  { name: 'อภิสรา กูลวงศ์ธนโรจน์',       remark: 'หัวหน้ากลุ่มงาน',     amount: 1000 },
+  { name: 'ศิรดา แสงไพบูลย์',            remark: 'หัวหน้ากลุ่มงาน',     amount: 1000 },
+  { name: 'ณัฏฐพัชร จันทร์หอม',          remark: 'ผู้ช่วยผู้อำนวยการ',   amount: 3000 },
+  { name: 'ลักขณา จิราพงษ์',             remark: 'ผู้ช่วยผู้อำนวยการ',   amount: 3000 },
+  { name: 'อรวรรณ อุตราวิสิทธิกุล',      remark: 'หัวหน้ากลุ่มงาน',     amount: 1000 },
+  { name: 'ดวงพร เกื้อกูลเกียรติ',        remark: 'หัวหน้ากลุ่มงาน',     amount: 1000 },
+  { name: 'พงศ์พจน์ ฉุยฉาย',             remark: 'ผู้ช่วยผู้อำนวยการ',   amount: 3000 },
+  { name: 'ทรงพล โพธิ์สุวรรณ',           remark: 'ประธาน PCT มะเร็ง',   amount:  800 },
+  { name: 'ฉัตรดาว สุจริต',              remark: 'ผู้ช่วยผู้อำนวยการ',   amount: 3000 },
+  { name: 'พิสิษฐ์ เลิศเชาวพัฒน์',       remark: 'หัวหน้ากลุ่มงาน',     amount: 1000 },
+  { name: 'วราวุธ เมธีศิริวัฒน์',         remark: 'รองผู้อำนวยการ',      amount: 7000 },
+  { name: 'ศุภศรัณย์ ศุภพัฒนพงศ์',        remark: 'รองผู้อำนวยการ',      amount: 7000 },
+  { name: 'ธิรัญฎา สุทธิพงศ์',            remark: 'ผู้ช่วยผู้อำนวยการ',   amount: 3000 },
+  { name: 'ธญาภร ลิขิตธรรมากุล',          remark: 'หัวหน้ากลุ่มงาน',     amount: 1000 },
+  { name: 'นฤวัต เกสรสุคนธ์',            remark: 'หัวหน้ากลุ่มงาน',     amount: 1000 },
+  { name: 'พยุงศักดิ์ ศักดาภิพาณิชย์',   remark: 'ประธาน PCT ENT',     amount:  800 },
+  { name: 'อัญชลี ชุ่มแจ่ม',             remark: 'ผู้ช่วยผู้อำนวยการ',   amount: 3000 },
+];
+
+// O(1) lookup: "firstname lastname" → { remark, amount }
+const MGMT_LOOKUP = Object.fromEntries(
+  MANAGEMENT_DATA.map(d => [normaliseName(d.name), { remark: d.remark, amount: d.amount }])
+);
+
+/** Return management entry for a person, or null */
+function getMgmt(person) {
+  const key = normaliseName(`${person.firstname} ${person.lastname}`);
+  return MGMT_LOOKUP[key] ?? null;
+}
+
 const DEPT_ORDER     = Object.fromEntries(Object.keys(DEPT_COLORS).map((k, i) => [k, i]));
 const DEPT_ORDER_MAX = Object.keys(DEPT_COLORS).length;
 
@@ -82,7 +117,8 @@ const SB = {
   emp_type:  'employee_type',   // type in GAS
   std:       'standard_score',
   boss:      'boss_score',
-  perf:      'performance_score', // score in GAS
+  perf:      'performance_score', // fallback col J
+  score:     'score',               // col J override — used when not null
   mgmt:      'management_fee',
   index:     'index',           // for updateSupabaseRowNum
 };
@@ -273,6 +309,7 @@ async function getSupabaseMonthData(supabase, tableKey) {
     std_score:  sbVal(r, SB.std,      2200),
     boss_score: sbVal(r, SB.boss,     0),
     perf_score: sbVal(r, SB.perf,     0),
+    score:      sbVal(r, SB.score,    null), // overrides perf_score in col J when not null
     mgmt_fee:   sbVal(r, SB.mgmt,     0),
     index:      sbVal(r, SB.index,    null),
   }));
@@ -475,8 +512,8 @@ function buildOverallRows(persons, S, isIntern) {
       p.level     || '',                                     // F: rank
       p.emp_type  || '',                                     // G: type
       p.std_score  ?? 2200,                                  // H
-      p.boss_score ?? 0,                                     // I
-      p.perf_score ?? 0,                                     // J: score
+      (getMgmt(p)?.amount ?? p.boss_score ?? 0),             // I: mgmt amount or boss score
+      p.score ?? p.perf_score ?? 0,                          // J: score (SB 'score' overrides 'performance_score')
       `=I${r}+J${r}`,                                       // K
       `=K${r}-H${r}`,                                       // L
       p.mgmt_fee   ?? 0,                                     // M
@@ -712,13 +749,18 @@ async function buildDeptSheets(sheets, ssId, depTmplSheetId, allPersons, beYear,
 
     // Data rows: [count, "prefix firstname  lastname", "position+rank", type, 0, 0, 0, " ", " "]
     // Note: double space before lastname — this is the key for rowNumMap lookup
-    const rows = persons.map((p, idx) => [
-      idx + 1,
-      `${p.prefix} ${p.firstname}  ${p.lastname}`,  // double space before lastname
-      `${p.position}${p.level}`,                     // concatenated, no separator
-      p.emp_type || '',
-      0, 0, 0, ' ', ' ',
-    ]);
+    const rows = persons.map((p, idx) => {
+      const mgmt = getMgmt(p);
+      return [
+        idx + 1,
+        `${p.prefix} ${p.firstname}  ${p.lastname}`,  // double space before lastname
+        `${p.position}${p.level}`,                     // concatenated, no separator
+        p.emp_type || '',
+        mgmt?.amount ?? 0,   // E: management amount (or 0)
+        0, 0, ' ',
+        mgmt?.remark ?? ' ', // I: remark
+      ];
+    });
     await sheets.spreadsheets.values.append({
       spreadsheetId: ssId,
       range: `'${dept}'!A${D}`,
@@ -745,7 +787,11 @@ async function buildDeptSheets(sheets, ssId, depTmplSheetId, allPersons, beYear,
         formulaData.push({ range: `'${dept}'!F${r}`, values: [[`='${internSheetName}'!N${rowNum}`]] });
         formulaData.push({ range: `'${dept}'!G${r}`, values: [[`=E${r}+F${r}`]] });
       } else {
-        formulaData.push({ range: `'${dept}'!E${r}`, values: [[`='${staffSheetName}'!M${rowNum}`]] });
+        // E: use mgmt amount (already written as value) or fall back to staff!M formula
+        const mgmt = getMgmt(p);
+        if (!mgmt) {
+          formulaData.push({ range: `'${dept}'!E${r}`, values: [[`='${staffSheetName}'!M${rowNum}`]] });
+        }
         formulaData.push({ range: `'${dept}'!F${r}`, values: [[`='${staffSheetName}'!N${rowNum}`]] });
         formulaData.push({ range: `'${dept}'!G${r}`, values: [[`=E${r}+F${r}`]] });
       }
@@ -900,7 +946,28 @@ async function createSK03(drive, sheets, supabasePersons, monthKey, supabase) {
 
   await writeOverallMeta(sheets, ssId, staffSheetName, staffLastRow, false, internSheetName);
   await formatOverallSheet(sheets, ssId, staffSheetId, staffArray, staffLastRow, false);
-  await writeOverallSignature(sheets, ssId, staffSheetName, staffSheetId, staffLastRow);
+
+  // Totals row: N and O = SUM of all persons, red background
+  const staffTotalRow = staffLastRow + 1;
+  const RED = { red: 0.933, green: 0.294, blue: 0.169 }; // #EE4B2B
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: ssId,
+    range: `'${staffSheetName}'!N${staffTotalRow}:O${staffTotalRow}`,
+    valueInputOption: 'USER_ENTERED',
+    requestBody: { values: [[`=SUM(N${S}:N${staffLastRow})`, `=SUM(O${S}:O${staffLastRow})`]] },
+  });
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId: ssId,
+    requestBody: { requests: [{
+      repeatCell: {
+        range: gridRange(staffSheetId, staffTotalRow - 1, 13, staffTotalRow - 1, 14), // N:O (0-based cols 13-14)
+        cell: { userEnteredFormat: { backgroundColor: RED } },
+        fields: 'userEnteredFormat.backgroundColor',
+      },
+    }]},
+  });
+
+  await writeOverallSignature(sheets, ssId, staffSheetName, staffSheetId, staffTotalRow);
 
   // Patch Supabase row_num for staff
   log(`  [SK03] Patching row_num for ${staffArray.length} staff…`);
