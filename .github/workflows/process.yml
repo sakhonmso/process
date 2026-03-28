@@ -32,6 +32,7 @@ jobs:
           GOOGLE_ROOT_FOLDER_ID:  ${{ secrets.GOOGLE_ROOT_FOLDER_ID }}
           GOOGLE_MERGE_FOLDER_ID:  ${{ secrets.GOOGLE_MERGE_FOLDER_ID }}
           GOOGLE_SK03_FOLDER_ID:  ${{ secrets.GOOGLE_SK03_FOLDER_ID }}
+          GOOGLE_SK03_TEMPLATE_ID: ${{ secrets.GOOGLE_SK03_TEMPLATE_ID }}
           SUPABASE_URL:           ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY:           ${{ secrets.SUPABASE_KEY }}
         run: node process.js

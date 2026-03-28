@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 /**
- * P4P Excel Merge Pipeline
+ * P4P Excel Merge + SK03 Pipeline
  * Step 1  — 6-month window in BE format
  * Step 2  — Google Drive: find month folder, list Excel files
  * Step 3  — Supabase: fetch person list + metadata
  * Step 4  — Compare Drive vs Supabase lists
  * Step 5  — Merge individual Excel files → one workbook per person sheet
- * Step 6  — Build SK03 summary workbook → upload to SK03 folder
+ * Step 6  — Create SK03 Google Spreadsheet via Sheets API (mirrors GAS doPost)
  */
 
 require('dotenv').config();
@@ -30,9 +30,10 @@ const CONFIG = {
     url: process.env.SUPABASE_URL,
     key: process.env.SUPABASE_KEY,
   },
-  rootFolderId:   process.env.GOOGLE_ROOT_FOLDER_ID,    // source year/month folders
-  outputFolderId: process.env.GOOGLE_MERGE_FOLDER_ID,  // merged file destination
-  sk03FolderId:   process.env.GOOGLE_SK03_FOLDER_ID,    // SK03 destination
+  rootFolderId:   process.env.GOOGLE_ROOT_FOLDER_ID,
+  outputFolderId: process.env.GOOGLE_MERGE_FOLDER_ID,
+  sk03FolderId:   process.env.GOOGLE_SK03_FOLDER_ID,
+  sk03TemplateId: process.env.GOOGLE_SK03_TEMPLATE_ID, // spreadsheet ID of SK03 template
 };
 
 // ─── Thai month names ────────────────────────────────────────────
@@ -49,6 +50,7 @@ const THAI_MONTH_ABBR = {
 };
 
 // ─── Dept colours & sort order ───────────────────────────────────
+// ORDER of keys defines sheet order. INTERN is last.
 const DEPT_COLORS = {
   'กุมารเวชกรรม':                          '#C8D3B8',
   'จักษุวิทยา':                            '#EEE7D3',
@@ -72,20 +74,21 @@ const DEPT_COLORS = {
 const DEPT_ORDER     = Object.fromEntries(Object.keys(DEPT_COLORS).map((k, i) => [k, i]));
 const DEPT_ORDER_MAX = Object.keys(DEPT_COLORS).length;
 
-// ─── Supabase column name mapping (update if DB differs) ─────────
+// ─── Supabase column name mapping ────────────────────────────────
 const SB = {
-  prefix:    'prefix',            // พญ. / นพ.
-  position:  'position',          // นายแพทย์
-  level:     'level',             // ชำนาญการ / เชี่ยวชาญ
-  emp_type:  'employee_type',     // ข้าราชการ
-  std:       'standard_score',    // col H  แต้มประกันมาตรฐาน (default 2200)
-  boss:      'boss_score',        // col I  คะแนนประกันหัวหน้างาน
-  perf:      'performance_score', // col J  คะแนนปฏิบัติงาน
-  mgmt:      'management_fee',    // col M  ค่าตอบแทนบริหาร
+  prefix:    'prefix',
+  position:  'position',
+  level:     'level',           // rank in GAS
+  emp_type:  'employee_type',   // type in GAS
+  std:       'standard_score',
+  boss:      'boss_score',
+  perf:      'performance_score', // score in GAS
+  mgmt:      'management_fee',
+  index:     'index',           // for updateSupabaseRowNum
 };
 
 // ═══════════════════════════════════════════════════════════════════
-//  STEP 1 — 6-month window (current month + 5 prior)
+//  STEP 1 — 6-month window
 // ═══════════════════════════════════════════════════════════════════
 function getTargetMonths() {
   const now = new Date();
@@ -101,32 +104,65 @@ function getTargetMonths() {
 // ═══════════════════════════════════════════════════════════════════
 //  Utility
 // ═══════════════════════════════════════════════════════════════════
-function stripExt(filename) { return filename.replace(/\.(xlsx|xls)$/i, '').trim(); }
-function normaliseName(name) { return (name ?? '').trim().replace(/\s+/g, ' '); }
-function toSheetName(name)   { return name.replace(/[\\/:?*[\]]/g, '').substring(0, 31).trim(); }
+function stripExt(filename)    { return filename.replace(/\.(xlsx|xls)$/i, '').trim(); }
+function normaliseName(name)   { return (name ?? '').trim().replace(/\s+/g, ' '); }
+function toSheetName(name)     { return name.replace(/[\\/:?*[\]]/g, '').substring(0, 31).trim(); }
+
 function hexToArgb(hex) {
   if (!hex) return undefined;
   const c = hex.replace('#', '').toUpperCase();
   return c.length === 6 ? `FF${c}` : undefined;
 }
+
+/** Convert #RRGGBB to Sheets API {red, green, blue} (0-1 range) */
+function hexToRgb(hex) {
+  const c = hex.replace('#', '');
+  return {
+    red:   parseInt(c.slice(0, 2), 16) / 255,
+    green: parseInt(c.slice(2, 4), 16) / 255,
+    blue:  parseInt(c.slice(4, 6), 16) / 255,
+  };
+}
+
+/**
+ * Convert a monthKey (e.g. "2568_12") to the Thai sheet name base
+ * used by the GAS scripts (e.g. "ธ.ค. 68"), matching the merge step's key.
+ */
+function monthKeyToSheetBase(monthKey) {
+  const [beYear, monthStr] = monthKey.split('_');
+  const month = parseInt(monthStr, 10);
+  return `${THAI_MONTH_ABBR[month]} ${beYear.slice(2)}`;  // e.g. "ธ.ค. 68"
+}
+
 function log(msg, level = 'info') {
   (level === 'warn' ? console.error : console.log)((level === 'warn' ? '⚠  ' : '') + msg);
 }
-/** Safely read a value from a Supabase row by column name; returns defaultVal if absent */
+
 function sbVal(row, colName, defaultVal = null) {
   const v = row[colName];
   return (v !== null && v !== undefined && v !== '') ? v : defaultVal;
 }
 
 // ═══════════════════════════════════════════════════════════════════
-//  Google Drive helpers
+//  Google API clients
 // ═══════════════════════════════════════════════════════════════════
-function createDriveClient() {
+function createAuth() {
   const auth = new google.auth.OAuth2(CONFIG.google.clientId, CONFIG.google.clientSecret);
   auth.setCredentials({ refresh_token: CONFIG.google.refreshToken });
-  return google.drive({ version: 'v3', auth });
+  return auth;
 }
 
+function createDriveClient() {
+  return google.drive({ version: 'v3', auth: createAuth() });
+}
+
+function createSheetsClient() {
+  return google.sheets({ version: 'v4', auth: createAuth() });
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Google Drive helpers
+// ═══════════════════════════════════════════════════════════════════
 async function driveListAll(drive, params) {
   const items = [];
   let pageToken;
@@ -161,7 +197,6 @@ async function downloadFile(drive, fileId) {
   return Buffer.from(res.data);
 }
 
-/** Upload buffer; overwrite if a file with the same name already exists in folderId */
 async function uploadFileToDrive(drive, folderId, fileName, buffer) {
   const mime     = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
   const safeName = fileName.replace(/'/g, "\\'");
@@ -169,7 +204,6 @@ async function uploadFileToDrive(drive, folderId, fileName, buffer) {
     q: `'${folderId}' in parents and name='${safeName}' and trashed=false`,
     fields: 'nextPageToken, files(id, name)', pageSize: 10,
   });
-
   if (existing.length > 0) {
     const [first, ...dupes] = existing;
     for (const d of dupes) {
@@ -185,7 +219,6 @@ async function uploadFileToDrive(drive, folderId, fileName, buffer) {
     });
     return res.data;
   }
-
   const res = await drive.files.create({
     requestBody: { name: fileName, parents: [folderId], mimeType: mime },
     media: { mimeType: mime, body: Readable.from([buffer]) },
@@ -195,52 +228,53 @@ async function uploadFileToDrive(drive, folderId, fileName, buffer) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-//  STEP 2 — Google Drive: find month folder + list Excel files
+//  STEP 2 — Google Drive: find month folder
 // ═══════════════════════════════════════════════════════════════════
 async function getDriveMonthData(drive, { beYear, month }) {
   const yearFolders = await listFolders(drive, CONFIG.rootFolderId);
   const yearFolder  = yearFolders.find(f => f.name === String(beYear));
-  if (!yearFolder) { log(`  [Drive] Year folder "${beYear}" not found → skipping`, 'warn'); return null; }
+  if (!yearFolder) { log(`  [Drive] Year folder "${beYear}" not found`, 'warn'); return null; }
 
   const thai       = THAI_MONTHS[month];
   const candidates = [`${month} - ${thai}`, `${String(month).padStart(2,'0')} - ${thai}`];
   const monthFolders = await listFolders(drive, yearFolder.id);
   const monthFolder  = monthFolders.find(f => candidates.includes(f.name));
-  if (!monthFolder) { log(`  [Drive] Month folder not found (tried: ${candidates.join(' | ')}) → skipping`, 'warn'); return null; }
+  if (!monthFolder) { log(`  [Drive] Month folder not found (tried: ${candidates.join(' | ')})`, 'warn'); return null; }
 
   const files = await listExcelFiles(drive, monthFolder.id);
-  if (files.length === 0) { log(`  [Drive] No Excel files in "${monthFolder.name}" → skipping`, 'warn'); return null; }
+  if (files.length === 0) { log(`  [Drive] No Excel files in "${monthFolder.name}"`, 'warn'); return null; }
 
   const names = files.map(f => normaliseName(stripExt(f.name)));
   return { names, files, folderId: monthFolder.id };
 }
 
 // ═══════════════════════════════════════════════════════════════════
-//  STEP 3 — Supabase: fetch all person data
+//  STEP 3 — Supabase
 // ═══════════════════════════════════════════════════════════════════
 async function getSupabaseMonthData(supabase, tableKey) {
   const { data, error } = await supabase.from(tableKey).select('*');
   if (error) {
     if (error.code === '42P01' || error.message?.includes('does not exist')) {
-      log(`  [Supabase] Table "${tableKey}" not found → skipping`, 'warn'); return null;
+      log(`  [Supabase] Table "${tableKey}" not found`, 'warn'); return null;
     }
     throw new Error(`Supabase error (${tableKey}): ${error.message}`);
   }
-  if (!data || data.length === 0) { log(`  [Supabase] Table "${tableKey}" is empty → skipping`, 'warn'); return null; }
+  if (!data || data.length === 0) { log(`  [Supabase] Table "${tableKey}" is empty`, 'warn'); return null; }
 
   return data.map(r => ({
-    fullname:      normaliseName(`${r.firstname ?? ''} ${r.lastname ?? ''}`),
-    firstname:     r.firstname ?? '',
-    lastname:      r.lastname  ?? '',
-    department:    (r.department ?? '').trim(),
-    prefix:        sbVal(r, SB.prefix,   ''),
-    position:      sbVal(r, SB.position, 'นายแพทย์'),
-    level:         sbVal(r, SB.level,    ''),
-    emp_type:      sbVal(r, SB.emp_type, 'ข้าราชการ'),
-    std_score:     sbVal(r, SB.std,      2200),
-    boss_score:    sbVal(r, SB.boss,     0),
-    perf_score:    sbVal(r, SB.perf,     0),
-    mgmt_fee:      sbVal(r, SB.mgmt,     0),
+    fullname:   normaliseName(`${r.firstname ?? ''} ${r.lastname ?? ''}`),
+    firstname:  r.firstname  ?? '',
+    lastname:   r.lastname   ?? '',
+    department: (r.department ?? '').trim(),
+    prefix:     sbVal(r, SB.prefix,   ''),
+    position:   sbVal(r, SB.position, 'นายแพทย์'),
+    level:      sbVal(r, SB.level,    ''),
+    emp_type:   sbVal(r, SB.emp_type, 'ข้าราชการ'),
+    std_score:  sbVal(r, SB.std,      2200),
+    boss_score: sbVal(r, SB.boss,     0),
+    perf_score: sbVal(r, SB.perf,     0),
+    mgmt_fee:   sbVal(r, SB.mgmt,     0),
+    index:      sbVal(r, SB.index,    null),
   }));
 }
 
@@ -250,7 +284,6 @@ async function getSupabaseMonthData(supabase, tableKey) {
 function listsMatch(driveNames, supabasePersons) {
   const normDrive = driveNames.map(normaliseName);
   const normSB    = supabasePersons.map(p => normaliseName(p.fullname));
-
   if (normDrive.length !== normSB.length) {
     log(`  [Compare] Length mismatch — Drive: ${normDrive.length}, Supabase: ${normSB.length}`, 'warn');
     normDrive.forEach(n => { if (!normSB.includes(n))   log(`    ✗ Drive but not SB: "${n}"`, 'warn'); });
@@ -266,7 +299,7 @@ function listsMatch(driveNames, supabasePersons) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-//  STEP 5 — Merge individual Excel files
+//  STEP 5 — Merge Excel files
 // ═══════════════════════════════════════════════════════════════════
 function isSheetEmpty(ws) {
   let count = 0;
@@ -316,9 +349,9 @@ function copyWorksheet(srcWS, dstWS) {
   });
   srcWS.eachRow({ includeEmpty: true }, (srcRow, rowNumber) => {
     const dstRow = dstWS.getRow(rowNumber);
-    if (srcRow.height)       dstRow.height       = srcRow.height;
-    if (srcRow.hidden)       dstRow.hidden        = srcRow.hidden;
-    if (srcRow.outlineLevel) dstRow.outlineLevel  = srcRow.outlineLevel;
+    if (srcRow.height)       dstRow.height      = srcRow.height;
+    if (srcRow.hidden)       dstRow.hidden       = srcRow.hidden;
+    if (srcRow.outlineLevel) dstRow.outlineLevel = srcRow.outlineLevel;
     srcRow.eachCell({ includeEmpty: true }, (srcCell, colNumber) => {
       const dstCell = dstWS.getCell(rowNumber, colNumber);
       dstCell.value = resolveCellValue(srcCell.value);
@@ -328,9 +361,7 @@ function copyWorksheet(srcWS, dstWS) {
     dstRow.commit();
   });
   if (srcWS.model?.merges) {
-    for (const m of srcWS.model.merges) {
-      try { dstWS.mergeCells(m); } catch (_) {}
-    }
+    for (const m of srcWS.model.merges) { try { dstWS.mergeCells(m); } catch (_) {} }
   }
 }
 
@@ -343,7 +374,7 @@ function sortByDeptThenName(a, b, deptMap) {
   return a.normName.localeCompare(b.normName, 'th');
 }
 
-/** Merge all Excel files → workbook with one sheet per person. Returns { uploaded, mergedWB }. */
+/** Merge all Excel files → one workbook with one sheet per person */
 async function mergeAndUpload(drive, driveFiles, supabasePersons, monthKey) {
   const deptMap = {};
   supabasePersons.forEach(p => { deptMap[normaliseName(p.fullname)] = p.department; });
@@ -392,245 +423,536 @@ async function mergeAndUpload(drive, driveFiles, supabasePersons, monthKey) {
     log(`      → ${outWS.rowCount} rows copied to "${sheetName}" [${dept || '?'}]${tabArgb ? ' 🎨' : ''}`);
   }
 
-  if (sheetCount === 0) { log('  [Merge] ⚠ No data — nothing to upload', 'warn'); return { uploaded: null, mergedWB }; }
+  if (sheetCount === 0) { log('  [Merge] ⚠ No data — nothing to upload', 'warn'); return null; }
 
   const buf  = await mergedWB.xlsx.writeBuffer();
   const name = `merged_${monthKey}.xlsx`;
   log(`\n  [Merge] Uploading "${name}" — ${sheetCount} sheets, ${totalRows} data rows…`);
   const uploaded = await uploadFileToDrive(drive, CONFIG.outputFolderId, name, buf);
   log(`  [Merge] ✓ id: ${uploaded.id}\n           🔗 ${uploaded.webViewLink}`);
-  return { uploaded, mergedWB };
+  return uploaded;
 }
 
 // ═══════════════════════════════════════════════════════════════════
-//  STEP 6 — Build SK03 summary workbook
+//  STEP 6 — Create SK03 Google Spreadsheet (mirrors GAS doPost × 3)
+//  Sheet order: staff → intern → one per dept (DEPT_COLORS order)
 // ═══════════════════════════════════════════════════════════════════
+
+// ─── Sheets API helpers ───────────────────────────────────────────
+/** Grid range helper — all indices 0-based, r2/c2 inclusive */
+function gridRange(sheetId, r1, c1, r2, c2) {
+  return { sheetId, startRowIndex: r1, endRowIndex: r2 + 1, startColumnIndex: c1, endColumnIndex: c2 + 1 };
+}
+
+const SOLID = { style: 'SOLID', width: 1 };
+
+function bordersReq(sheetId, r1, c1, r2, c2, inner = false) {
+  return {
+    updateBorders: {
+      range: gridRange(sheetId, r1, c1, r2, c2),
+      top: SOLID, bottom: SOLID, left: SOLID, right: SOLID,
+      ...(inner ? { innerHorizontal: SOLID, innerVertical: SOLID } : {}),
+    },
+  };
+}
+
+// ─── Overall sheet helpers (staff + intern share the same template) ─
 
 /**
- * Write a single SK03-format sheet.
- * @param {object} opts
- *   isIntern      – true for the intern summary sheet
- *   internSheetName – name of the intern sheet (for staff cross-references)
- *   rateCell      – 'Y14' for staff, 'Y13' for intern (per-P4P rate cell)
+ * Build the 22-column data rows for an overall (staff/intern) sheet.
+ * Mirrors the appendRow + setFormula loop in both GAS scripts.
  */
-function buildSK03Sheet(ws, persons, beYear, month, opts = {}) {
-  const { isIntern = false, internSheetName = '' } = opts;
-  const monthFull = THAI_MONTHS[month];
-  const S = 8;                         // first data row
-  const n = persons.length;
-  const L = S + n - 1;                 // last data row
-  const T = L + 1;                     // totals row
+function buildOverallRows(persons, S, isIntern) {
   const rateCell = isIntern ? 'Y13' : 'Y14';
-
-  // ── Column widths ──────────────────────────────────────────────
-  const widths = { A:5.29, B:4.14, C:15.29, D:18.43, E:11.71, F:23.14, G:18.71,
-    H:9.29, I:13, J:10.43, K:13, L:11.14, M:13.29, N:13.71, O:13,
-    P:9.14, Q:8.71, R:13, S:13, T:13, U:13, V:13, W:7.86, X:33.71, Y:21 };
-  Object.entries(widths).forEach(([col, w]) => { ws.getColumn(col).width = w; });
-
-  // ── Row heights ────────────────────────────────────────────────
-  [1,2,3,4].forEach(r => { ws.getRow(r).height = 21; });
-  ws.getRow(5).height = 18; ws.getRow(6).height = 60.75; ws.getRow(7).height = 30;
-  for (let r = S; r <= T + 3; r++) ws.getRow(r).height = 30;
-
-  // ── Helper: set bold centered header cell ──────────────────────
-  const hdr = (coord, value) => {
-    const c = ws.getCell(coord);
-    c.value = value;
-    c.font  = { bold: true };
-    c.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
-  };
-
-  // ── Rows 1-3 ──────────────────────────────────────────────────
-  ws.mergeCells('A1:P1');
-  hdr('A1', 'แบบสรุปภาระงานและประเมินผล (แต้มคะแนน)');
-  ws.mergeCells('A2:P2');
-  ws.getCell('A2').value = 'หน่วยงาน...........องค์กรแพทย์ ................                  กลุ่มภารกิจ.....................................................';
-  ws.getCell('A2').alignment = { horizontal: 'left' };
-  ws.mergeCells('A3:P3');
-  ws.getCell('A3').value = `ประจำเดือน  ${monthFull}  พ.ศ.  ${beYear}`;
-  ws.getCell('A3').alignment = { horizontal: 'center' };
-
-  // ── Row 5: main headers (with merges spanning rows 5-7) ───────
-  ws.mergeCells('A5:A7');  hdr('A5', 'ที่');
-  ws.mergeCells('B5:D7');  hdr('B5', 'ชื่อ-สกุล');
-  ws.mergeCells('E5:E7');  hdr('E5', 'ตำแหน่ง ');
-  ws.mergeCells('F5:F7');  hdr('F5', 'ระดับ');
-  ws.mergeCells('G5:G7');  hdr('G5', 'ประเภท\n(ข้าราชการ/พนักงานราชการ/ลูกจ้างประจำ/ลูกจ้างชั่วคราว)');
-  ws.mergeCells('H5:H6');  hdr('H5', 'แต้มประกันมาตรฐาน\n(แต้ม)');
-  ws.mergeCells('I5:I6');  hdr('I5', 'คะแนนประกันหัวหน้างาน\n(แต้ม)');
-  ws.mergeCells('J5:J6');  hdr('J5', 'คะแนน \nปฏิบัติงาน\n(แต้ม)');
-  ws.mergeCells('K5:K6');  hdr('K5', 'รวมคะแนน\n(แต้มที่ทำได้ทั้งหมด)\n(แต้ม)');
-  ws.mergeCells('L5:O5');  hdr('L5', 'ประเมินผล');
-  ws.mergeCells('P5:P7');  hdr('P5', 'หมายเหตุ');
-  ws.mergeCells('V5:V7');  hdr('V5', 'MAX');
-
-  // stats headers (not merged across rows)
-  hdr('R5', 'AVG'); hdr('T5', 'STD');
-  ws.getCell('S5').value = `=AVERAGE(L${S}:L${L})`;
-  ws.getCell('U5').value = `=_xlfn.STDEV.P(L${S}:L${L})`;
-
-  // ── Row 6: sub-headers ────────────────────────────────────────
-  hdr('L6', 'คะแนน\nที่เกินมาตรฐาน (แต้ม)');
-  hdr('M6', 'ค่าตอบแทนบริหาร');
-  hdr('N6', 'ค่าตอบแทนตามสัดส่วนวิชาชีพ');
-  hdr('O6', 'รวมจำนวน\nเงินที่จ่าย');
-  hdr('Q6', 'AVG-2SD'); hdr('R6', 'AVG-1SD'); hdr('S6', 'AVG '); hdr('T6', 'AVG+1SD'); hdr('U6', 'AVG+2SD');
-
-  // ── Row 7: column labels + SD statistics ──────────────────────
-  ['H7:A','I7:B','J7:C','K7:D = B+C','L7: E = D-A','M7:(บาท)','N7:(บาท)','O7:(บาท)'].forEach(s => {
-    const [coord, ...rest] = s.split(':');
-    ws.getCell(coord).value = rest.join(':');
-    ws.getCell(coord).alignment = { horizontal: 'center', vertical: 'middle' };
-  });
-  ws.getCell('Q7').value = '=S5-2*U5';
-  ws.getCell('R7').value = '=S5-U5';
-  ws.getCell('S7').value = '=S5';
-  ws.getCell('T7').value = '=S5+U5';
-  ws.getCell('U7').value = '=S5+2*U5';
-
-  // ── Data rows ─────────────────────────────────────────────────
-  persons.forEach((p, idx) => {
+  return persons.map((p, idx) => {
     const r = S + idx;
-    ws.getCell(`A${r}`).value = idx + 1;
-    ws.getCell(`B${r}`).value = p.prefix    || '';
-    ws.getCell(`C${r}`).value = p.firstname || '';
-    ws.getCell(`D${r}`).value = p.lastname  || '';
-    ws.getCell(`E${r}`).value = p.position  || 'นายแพทย์';
-    ws.getCell(`F${r}`).value = isIntern ? '' : (p.level || '');
-    ws.getCell(`G${r}`).value = p.emp_type  || '';
-    ws.getCell(`H${r}`).value = p.std_score  ?? 2200;
-    ws.getCell(`I${r}`).value = p.boss_score ?? 0;
-    ws.getCell(`J${r}`).value = p.perf_score ?? 0;
-    ws.getCell(`K${r}`).value = `=I${r}+J${r}`;
-    ws.getCell(`L${r}`).value = `=K${r}-H${r}`;
-    ws.getCell(`M${r}`).value = p.mgmt_fee  ?? 0;
-    ws.getCell(`N${r}`).value = `=ROUNDDOWN(V${r}*${rateCell},0)`;
-    ws.getCell(`O${r}`).value = `=M${r}+N${r}`;
-    ws.getCell(`P${r}`).value = ' ';
-    ws.getCell(`Q${r}`).value = `=IF(L${r}>0,IF(L${r}>Q7,0.9,0),0)`;
-    ws.getCell(`R${r}`).value = `=IF(L${r}>R7,0.95,0)`;
-    ws.getCell(`S${r}`).value = `=IF(L${r}>=S7,1,0)`;
-    ws.getCell(`T${r}`).value = `=IF(L${r}>T7,1.05,0)`;
-    ws.getCell(`U${r}`).value = `=IF(L${r}>U7,1.1,0)`;
-    ws.getCell(`V${r}`).value = `=MAX(Q${r}:U${r})`;
-    ws.getRow(r).commit();
+    return [
+      idx + 1,                                               // A: sequence
+      p.prefix    || '',                                     // B
+      p.firstname || '',                                     // C
+      p.lastname  || '',                                     // D
+      p.position  || 'นายแพทย์',                            // E
+      p.level     || '',                                     // F: rank
+      p.emp_type  || '',                                     // G: type
+      p.std_score  ?? 2200,                                  // H
+      p.boss_score ?? 0,                                     // I
+      p.perf_score ?? 0,                                     // J: score
+      `=I${r}+J${r}`,                                       // K
+      `=K${r}-H${r}`,                                       // L
+      p.mgmt_fee   ?? 0,                                     // M
+      `=ROUNDDOWN(V${r}*${rateCell},0)`,                    // N
+      `=M${r}+N${r}`,                                       // O
+      ' ',                                                   // P: remark
+      `=IF(L${r}>0,IF(L${r}>Q7,0.90,0.00),0.00)`,         // Q
+      `=IF(L${r}>R7,0.95,0.00)`,                           // R
+      `=IF(L${r}>=S7,1.00,0.00)`,                          // S
+      `=IF(L${r}>T7,1.05,0.00)`,                           // T
+      `=IF(L${r}>U7,1.10,0.00)`,                           // U
+      `=MAX(Q${r}:U${r})`,                                  // V
+    ];
   });
-
-  // ── Totals row ────────────────────────────────────────────────
-  ws.getCell(`N${T}`).value = `=SUM(N${S}:N${L})`;
-  ws.getCell(`O${T}`).value = `=SUM(O${S}:O${L})`;
-  ws.getRow(T).commit();
-
-  // ── Side panel ────────────────────────────────────────────────
-  if (isIntern) {
-    // Intern side panel — Y9=budget, Y12=sum points, Y13=rate, Y16=total payout
-    ws.mergeCells('X8:Y8');
-    ws.getCell('X8').value = 'งบจัดสรร';
-    ws.getCell('X9').value = 'เฉพาะ intern';
-    ws.getCell('Y9').value = 0;               // ← fill in intern budget
-    ws.mergeCells('X11:Y11');
-    ws.getCell('X11').value = 'ค่าที่คำนวณได้';
-    ws.getCell('X12').value = 'sum point';
-    ws.getCell('Y12').value = `=SUM(V${S}:V${L})`;
-    ws.getCell('X13').value = 'per P4P';
-    ws.getCell('Y13').value = '=Y9/Y12';
-    ws.mergeCells('X15:Y15');
-    ws.getCell('X15').value = 'ผลรวม';
-    ws.getCell('X16').value = 'P4P intern';
-    ws.getCell('Y16').value = `=SUM(O${S}:O${L})`;  // ← referenced by staff sheet
-  } else {
-    // Staff side panel
-    ws.mergeCells('X8:Y8');
-    ws.getCell('X8').value = 'งบจัดสรร';
-    ws.getCell('X9').value = 'งบทั้งหมด';
-    ws.getCell('Y9').value = 0;               // ← fill in total budget
-    ws.getCell('X10').value = 'เฉพาะ staff';
-    ws.getCell('Y10').value = `=Y9-'${internSheetName}'!Y16`;
-    ws.mergeCells('X12:Y12');
-    ws.getCell('X12').value = 'ค่าที่คำนวณได้';
-    ws.getCell('X13').value = 'sum point';
-    ws.getCell('Y13').value = `=SUM(V${S}:V${L})`;
-    ws.getCell('X14').value = 'per P4P';
-    ws.getCell('Y14').value = '=Y10/Y13';
-    ws.mergeCells('X16:Y16');
-    ws.getCell('X16').value = 'ผลรวม';
-    ws.getCell('X17').value = 'ค่าตอบแทนตามสัดส่วนวิชาชีพ';
-    ws.getCell('Y17').value = `=SUM(N${S}:N${L})`;
-    ws.getCell('X18').value = 'ค่าตอบแทนบริหาร';
-    ws.getCell('Y18').value = `=SUM(M${S}:M${L})`;
-    ws.getCell('X19').value = 'P4P staff & intern (ไม่รวมค่าบริหาร)';
-    ws.getCell('Y19').value = `=Y17+'${internSheetName}'!Y16`;
-    ws.getCell('X20').value = 'P4P staff & intern (รวมค่าบริหาร)';
-    ws.getCell('Y20').value = '=Y19+Y18';
-    ws.mergeCells('X22:Y22');
-    ws.getCell('X22').value = 'คงคืน';
-    ws.mergeCells('X23:Y23');
-    ws.getCell('X23').value = '=Y9-Y19';
-  }
-
-  // ── Signature rows ────────────────────────────────────────────
-  const sig1 = T + 3, sig2 = T + 4;
-  ws.mergeCells(`A${sig1}:P${sig1}`);
-  ws.getCell(`A${sig1}`).value = 'ลงชื่อ................................................................................................................หัวหน้างาน/กลุ่มงาน/งาน';
-  ws.getRow(sig1).commit();
-  ws.mergeCells(`A${sig2}:P${sig2}`);
-  ws.getCell(`A${sig2}`).value = '(....................................................................................................................................)';
-  ws.getRow(sig2).commit();
 }
 
-/** Create SK03 workbook and upload to sk03FolderId */
-async function createAndUploadSK03(drive, supabasePersons, monthInfo) {
-  const { key, beYear, month } = monthInfo;
-  const abbr        = THAI_MONTH_ABBR[month];
-  const yr2         = String(beYear).slice(-2);
-  const staffName   = `${abbr} ${yr2} - staff`;
-  const internName  = `${abbr} ${yr2} - intern`;
+/**
+ * Write stat formulas (S5, U5) and side panel values.
+ * Staff and intern have different side panel structure — mirrors both GAS scripts.
+ */
+async function writeOverallMeta(sheets, ssId, sheetName, lastRow, isIntern, internSheetName) {
+  const S      = 8;
+  const intern = `'${internSheetName}'`;
 
-  const deptMap = {};
-  supabasePersons.forEach(p => { deptMap[normaliseName(p.fullname)] = p.department; });
+  const panelData = isIntern
+    ? [  // ── Intern side panel (rows 8, 11, 15) ────────────────
+        { range: `'${sheetName}'!X8:Y8`,   values: [['งบจัดสรร', '']] },
+        { range: `'${sheetName}'!X9:Y9`,   values: [['เฉพาะ intern', 0]] },
+        { range: `'${sheetName}'!X11:Y11`, values: [['ค่าที่คำนวณได้', '']] },
+        { range: `'${sheetName}'!X12:Y13`, values: [
+          ['sum point', `=SUM(V${S}:V${lastRow})`],
+          ['per P4P',   '=Y9/Y12'],
+        ]},
+        { range: `'${sheetName}'!X15:Y15`, values: [['ผลรวม', '']] },
+        { range: `'${sheetName}'!X16:Y16`, values: [['P4P intern', `=SUM(O${S}:O${lastRow})`]] },
+      ]
+    : [  // ── Staff side panel (rows 8, 12, 16, 22) ─────────────
+        { range: `'${sheetName}'!X8:Y8`,   values: [['งบจัดสรร', '']] },
+        { range: `'${sheetName}'!X9:Y10`,  values: [
+          ['งบทั้งหมด',   0],
+          ['เฉพาะ staff', `=Y9-${intern}!Y16`],
+        ]},
+        { range: `'${sheetName}'!X12:Y12`, values: [['ค่าที่คำนวณได้', '']] },
+        { range: `'${sheetName}'!X13:Y14`, values: [
+          ['sum point', `=SUM(V${S}:V${lastRow})`],
+          ['per P4P',   '=Y10/Y13'],
+        ]},
+        { range: `'${sheetName}'!X16:Y16`, values: [['ผลรวม', '']] },
+        { range: `'${sheetName}'!X17:Y20`, values: [
+          ['ค่าตอบแทนตามสัดส่วนวิชาชีพ',     `=SUM(N${S}:N${lastRow})`],
+          ['ค่าตอบแทนบริหาร',                 `=SUM(M${S}:M${lastRow})`],
+          ['P4P staff & intern (ไม่รวมค่าบริหาร)', `=Y17+${intern}!Y16`],
+          ['P4P staff & intern (รวมค่าบริหาร)',     '=Y19+Y18'],
+        ]},
+        { range: `'${sheetName}'!X22:Y22`, values: [['คงคืน', '']] },
+        { range: `'${sheetName}'!X23:Y23`, values: [['=Y9-Y19', '']] },
+      ];
 
-  // Sort everyone same as merged file
-  const sorted = [...supabasePersons].sort((a, b) => {
-    const dA = a.department, dB = b.department;
-    const idxA = DEPT_ORDER[dA] ?? DEPT_ORDER_MAX;
-    const idxB = DEPT_ORDER[dB] ?? DEPT_ORDER_MAX;
-    if (idxA !== idxB) return idxA - idxB;
-    return normaliseName(a.fullname).localeCompare(normaliseName(b.fullname), 'th');
+  await sheets.spreadsheets.values.batchUpdate({
+    spreadsheetId: ssId,
+    requestBody: {
+      valueInputOption: 'USER_ENTERED',
+      data: [
+        { range: `'${sheetName}'!S5`, values: [[`=AVERAGE(L${S}:L${lastRow})`]] },
+        { range: `'${sheetName}'!U5`, values: [[`=STDEV.P(L${S}:L${lastRow})`]] },
+        ...panelData,
+      ],
+    },
+  });
+}
+
+/**
+ * Apply all formatting for an overall sheet:
+ * - J column dept background per row
+ * - Number formats (H:O = ###,##0.00 | Q:V = 0.00 | Y = ###,##0.00)
+ * - Data area borders
+ * - Side panel grey headers + borders + merges
+ */
+async function formatOverallSheet(sheets, ssId, sheetId, persons, lastRow, isIntern) {
+  const S     = 8;
+  const R8    = S - 1;          // 0-based row 8
+  const RLast = lastRow - 1;    // 0-based last data row
+  const GRAY  = { red: 0.831, green: 0.831, blue: 0.831 };
+  const GRAY_CELL   = { userEnteredFormat: { backgroundColor: GRAY, textFormat: { bold: true }, horizontalAlignment: 'CENTER' } };
+  const GRAY_FIELDS = 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)';
+
+  const fmtReqs = [];
+
+  // J column (idx 9) background per dept per row
+  persons.forEach((p, idx) => {
+    const hex = DEPT_COLORS[p.department];
+    if (!hex) return;
+    const ri = S - 1 + idx; // 0-based row
+    fmtReqs.push({
+      repeatCell: {
+        range: gridRange(sheetId, ri, 9, ri, 9),
+        cell: { userEnteredFormat: { backgroundColor: hexToRgb(hex) } },
+        fields: 'userEnteredFormat.backgroundColor',
+      },
+    });
   });
 
-  const staff  = sorted.filter(p => p.department !== 'INTERN');
-  const intern = sorted.filter(p => p.department === 'INTERN');
+  // Number formats
+  fmtReqs.push({ repeatCell: { range: gridRange(sheetId, R8, 7,  RLast, 14), cell: { userEnteredFormat: { numberFormat: { type: 'NUMBER', pattern: '###,##0.00' } } }, fields: 'userEnteredFormat.numberFormat' } });
+  fmtReqs.push({ repeatCell: { range: gridRange(sheetId, R8, 16, RLast, 21), cell: { userEnteredFormat: { numberFormat: { type: 'NUMBER', pattern: '0.00' } } },        fields: 'userEnteredFormat.numberFormat' } });
+  fmtReqs.push({ repeatCell: { range: gridRange(sheetId, R8, 24, RLast, 24), cell: { userEnteredFormat: { numberFormat: { type: 'NUMBER', pattern: '###,##0.00' } } }, fields: 'userEnteredFormat.numberFormat' } });
 
-  const sk03WB = new ExcelJS.Workbook();
+  // Data area borders (mirrors GAS: A8:A, B8:D, E8:P with inner)
+  fmtReqs.push(bordersReq(sheetId, R8, 0,  RLast, 0));
+  fmtReqs.push(bordersReq(sheetId, R8, 1,  RLast, 3));
+  fmtReqs.push(bordersReq(sheetId, R8, 4,  RLast, 15, true));
 
-  // Sheet 1: staff summary
-  const staffWS = sk03WB.addWorksheet(staffName);
-  buildSK03Sheet(staffWS, staff, beYear, month, { isIntern: false, internSheetName: internName });
+  // Side panel grey header rows (0-based)
+  // Staff: rows 8,12,16,22 → 0-based 7,11,15,21
+  // Intern: rows 8,11,15   → 0-based 7,10,14
+  const hdrRows = isIntern ? [7, 10, 14] : [7, 11, 15, 21];
+  hdrRows.forEach(r => {
+    fmtReqs.push({ repeatCell: { range: gridRange(sheetId, r, 23, r, 24), cell: GRAY_CELL, fields: GRAY_FIELDS } });
+    fmtReqs.push(bordersReq(sheetId, r, 23, r, 24));
+    fmtReqs.push({ mergeCells: { range: gridRange(sheetId, r, 23, r, 24), mergeType: 'MERGE_ALL' } });
+  });
 
-  // Sheet 2: intern summary
-  const internWS = sk03WB.addWorksheet(internName);
-  buildSK03Sheet(internWS, intern, beYear, month, { isIntern: true });
-
-  // Sheets 3+: one per department (DEPT_COLORS order, INTERN last)
-  for (const dept of Object.keys(DEPT_COLORS)) {
-    const deptPersons = sorted.filter(p => p.department === dept);
-    if (deptPersons.length === 0) continue;
-    const argb  = hexToArgb(DEPT_COLORS[dept]);
-    const deptWS = sk03WB.addWorksheet(dept.substring(0, 31), {
-      properties: argb ? { tabColor: { argb } } : {},
-    });
-    // Dept sheets are standalone (no intern cross-ref, use their own rate Y14)
-    buildSK03Sheet(deptWS, deptPersons, beYear, month,
-      { isIntern: dept === 'INTERN', internSheetName: internName });
+  // Side panel data borders
+  if (isIntern) {
+    fmtReqs.push(bordersReq(sheetId, 8,  23, 8,  24));  // X9:Y9
+    fmtReqs.push(bordersReq(sheetId, 11, 23, 12, 24));  // X12:Y13
+    fmtReqs.push(bordersReq(sheetId, 14, 23, 15, 24));  // X15:Y16
+  } else {
+    fmtReqs.push(bordersReq(sheetId, 8,  23, 9,  24));  // X9:Y10
+    fmtReqs.push(bordersReq(sheetId, 12, 23, 13, 24));  // X13:Y14
+    fmtReqs.push(bordersReq(sheetId, 16, 23, 19, 24));  // X17:Y20
+    fmtReqs.push(bordersReq(sheetId, 22, 23, 22, 24));  // X23:Y23
+    fmtReqs.push({ mergeCells: { range: gridRange(sheetId, 22, 23, 22, 24), mergeType: 'MERGE_ALL' } });
   }
 
-  const buf      = await sk03WB.xlsx.writeBuffer();
-  const fileName = `sk03_${key}.xlsx`;
-  log(`\n  [SK03] Uploading "${fileName}"…`);
-  const uploaded = await uploadFileToDrive(drive, CONFIG.sk03FolderId, fileName, buf);
-  log(`  [SK03] ✓ id: ${uploaded.id}\n           🔗 ${uploaded.webViewLink}`);
-  return uploaded;
+  await sheets.spreadsheets.batchUpdate({ spreadsheetId: ssId, requestBody: { requests: fmtReqs } });
+}
+
+/**
+ * Append 6 blank rows then signature rows at lastRow+4 and lastRow+5.
+ * Mirrors GAS: both staff and intern scripts.
+ */
+async function writeOverallSignature(sheets, ssId, sheetName, sheetId, lastRow) {
+  const blankRows = Array.from({ length: 6 }, () => Array.from({ length: 26 }, () => ' '));
+  await sheets.spreadsheets.values.append({
+    spreadsheetId: ssId,
+    range: `'${sheetName}'!A${lastRow + 1}`,
+    valueInputOption: 'RAW',
+    requestBody: { values: blankRows },
+  });
+
+  const sig1 = lastRow + 4;
+  const sig2 = lastRow + 5;
+
+  await sheets.spreadsheets.values.batchUpdate({
+    spreadsheetId: ssId,
+    requestBody: {
+      valueInputOption: 'RAW',
+      data: [
+        { range: `'${sheetName}'!A${sig1}`, values: [['ลงชื่อ................................................................................................................หัวหน้างาน/กลุ่มงาน/งาน']] },
+        { range: `'${sheetName}'!A${sig2}`, values: [['(.....................................................................................................................................)']] },
+      ],
+    },
+  });
+
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId: ssId,
+    requestBody: {
+      requests: [
+        { mergeCells: { range: gridRange(sheetId, sig1 - 1, 0, sig1 - 1, 15), mergeType: 'MERGE_ALL' } },
+        { mergeCells: { range: gridRange(sheetId, sig2 - 1, 0, sig2 - 1, 15), mergeType: 'MERGE_ALL' } },
+        { repeatCell: {
+            range: gridRange(sheetId, sig1 - 1, 0, sig2 - 1, 15),
+            cell: { userEnteredFormat: { horizontalAlignment: 'CENTER', textFormat: { bold: true } } },
+            fields: 'userEnteredFormat(horizontalAlignment,textFormat)',
+        }},
+      ],
+    },
+  });
+}
+
+// ─── Department sheets ─────────────────────────────────────────────
+
+/**
+ * Build all department sheets from dep_template.
+ * Mirrors GAS dep doPost: one sheet per dept in DEPT_COLORS order.
+ * Uses rowNumMap to link back to staff/intern sheet row numbers.
+ *
+ * rowNumMap key: "prefix firstname  lastname" (double space before lastname)
+ * rowNumMap value: 1-based row number in staff or intern sheet
+ */
+async function buildDeptSheets(sheets, ssId, depTmplSheetId, allPersons, beYear, month, staffSheetName, internSheetName, rowNumMap) {
+  const D = 6; // first data row in dep_template (rows 1-5 are header)
+
+  for (const dept of Object.keys(DEPT_COLORS)) {
+    const persons = allPersons
+      .filter(p => p.department === dept)
+      .sort((a, b) => normaliseName(a.fullname).localeCompare(normaliseName(b.fullname), 'th'));
+
+    if (persons.length === 0) continue;
+    log(`  [SK03] Dept sheet: "${dept}" (${persons.length})`);
+
+    // Copy dep_template
+    const copyRes = await sheets.spreadsheets.sheets.copyTo({
+      spreadsheetId: CONFIG.sk03TemplateId, sheetId: depTmplSheetId,
+      requestBody: { destinationSpreadsheetId: ssId },
+    });
+    const sheetId = copyRes.data.sheetId;
+
+    // Rename + tab colour
+    const rgb = DEPT_COLORS[dept] ? hexToRgb(DEPT_COLORS[dept]) : null;
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: ssId,
+      requestBody: { requests: [{
+        updateSheetProperties: {
+          properties: { sheetId, title: dept, ...(rgb ? { tabColorStyle: { rgbColor: rgb } } : {}) },
+          fields: rgb ? 'title,tabColorStyle' : 'title',
+        },
+      }]},
+    });
+
+    // Header: A2 = month/year, A3 = dept name (mirrors GAS)
+    await sheets.spreadsheets.values.batchUpdate({
+      spreadsheetId: ssId,
+      requestBody: {
+        valueInputOption: 'RAW',
+        data: [
+          { range: `'${dept}'!A2`, values: [[`ประจำเดือน  ${THAI_MONTHS[month]}  พ.ศ.  ${beYear}`]] },
+          { range: `'${dept}'!A3`, values: [[`หน่วยงาน  ${dept} กลุ่มภารกิจ ด้านตติยภูมิ`]] },
+        ],
+      },
+    });
+
+    // Data rows: [count, "prefix firstname  lastname", "position+rank", type, 0, 0, 0, " ", " "]
+    // Note: double space before lastname — this is the key for rowNumMap lookup
+    const rows = persons.map((p, idx) => [
+      idx + 1,
+      `${p.prefix} ${p.firstname}  ${p.lastname}`,  // double space before lastname
+      `${p.position}${p.level}`,                     // concatenated, no separator
+      p.emp_type || '',
+      0, 0, 0, ' ', ' ',
+    ]);
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: ssId,
+      range: `'${dept}'!A${D}`,
+      valueInputOption: 'USER_ENTERED',
+      requestBody: { values: rows },
+    });
+
+    const lastRow      = D + persons.length - 1;
+    const isInternDept = dept === 'INTERN';
+    const formulaData  = [];
+
+    // Set E, F, G formulas referencing staff/intern sheet via row_num
+    // Non-INTERN: E = staff!M, F = staff!N, G = E+F
+    // INTERN:     F = intern!N, G = E+F (E left as 0)
+    for (let i = 0; i < persons.length; i++) {
+      const p       = persons[i];
+      const nameKey = `${p.prefix} ${p.firstname}  ${p.lastname}`;
+      const rowNum  = rowNumMap[nameKey];
+      const r       = D + i;
+
+      if (rowNum == null) { log(`  [SK03] ⚠ row_num missing for "${nameKey}"`, 'warn'); continue; }
+
+      if (isInternDept) {
+        formulaData.push({ range: `'${dept}'!F${r}`, values: [[`='${internSheetName}'!N${rowNum}`]] });
+        formulaData.push({ range: `'${dept}'!G${r}`, values: [[`=E${r}+F${r}`]] });
+      } else {
+        formulaData.push({ range: `'${dept}'!E${r}`, values: [[`='${staffSheetName}'!M${rowNum}`]] });
+        formulaData.push({ range: `'${dept}'!F${r}`, values: [[`='${staffSheetName}'!N${rowNum}`]] });
+        formulaData.push({ range: `'${dept}'!G${r}`, values: [[`=E${r}+F${r}`]] });
+      }
+    }
+    if (formulaData.length > 0) {
+      await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: ssId,
+        requestBody: { valueInputOption: 'USER_ENTERED', data: formulaData },
+      });
+    }
+
+    // Borders + number format (mirrors GAS dep: A6:I with inner, E6:G number format)
+    const R_S = D - 1; // 0-based data start
+    const R_E = lastRow - 1;
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: ssId,
+      requestBody: { requests: [
+        bordersReq(sheetId, R_S, 0, R_E, 8, true),
+        { repeatCell: {
+            range: gridRange(sheetId, R_S, 4, R_E, 6),
+            cell: { userEnteredFormat: { numberFormat: { type: 'NUMBER', pattern: '###,##0.00' } } },
+            fields: 'userEnteredFormat.numberFormat',
+        }},
+      ]},
+    });
+
+    // 5 blank rows then signatures at lastRow+3 (two sections) and lastRow+5 (one)
+    const blankRows = Array.from({ length: 5 }, () => Array.from({ length: 10 }, () => ' '));
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: ssId,
+      range: `'${dept}'!A${lastRow + 1}`,
+      valueInputOption: 'RAW',
+      requestBody: { values: blankRows },
+    });
+
+    const sig1 = lastRow + 3;
+    const sig2 = lastRow + 5;
+    await sheets.spreadsheets.values.batchUpdate({
+      spreadsheetId: ssId,
+      requestBody: {
+        valueInputOption: 'RAW',
+        data: [
+          { range: `'${dept}'!A${sig1}`, values: [['................................................................................................................หัวหน้างาน/กลุ่มงาน/ฝ่าย']] },
+          { range: `'${dept}'!E${sig1}`, values: [['................................................................................................................หัวหน้ากลุ่มภารกิจ']] },
+          { range: `'${dept}'!A${sig2}`, values: [['................................................................................................................ประธานคณะกรรมการตรวจสอบค่าคะแนน']] },
+        ],
+      },
+    });
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: ssId,
+      requestBody: { requests: [
+        { mergeCells: { range: gridRange(sheetId, sig1-1, 0, sig1-1, 3), mergeType: 'MERGE_ALL' } }, // A:D
+        { mergeCells: { range: gridRange(sheetId, sig1-1, 4, sig1-1, 8), mergeType: 'MERGE_ALL' } }, // E:I
+        { mergeCells: { range: gridRange(sheetId, sig2-1, 0, sig2-1, 8), mergeType: 'MERGE_ALL' } }, // A:I
+        { repeatCell: { range: gridRange(sheetId, sig1-1, 0, sig1-1, 8), cell: { userEnteredFormat: { horizontalAlignment: 'CENTER', textFormat: { bold: true } } }, fields: 'userEnteredFormat(horizontalAlignment,textFormat)' } },
+        { repeatCell: { range: gridRange(sheetId, sig2-1, 0, sig2-1, 8), cell: { userEnteredFormat: { horizontalAlignment: 'CENTER', textFormat: { bold: true } } }, fields: 'userEnteredFormat(horizontalAlignment,textFormat)' } },
+      ]},
+    });
+  }
+
+  // Delete "ชีต1" if still present (created with the spreadsheet, normally deleted in staff step)
+  const meta   = await sheets.spreadsheets.get({ spreadsheetId: ssId, fields: 'sheets.properties' });
+  const sheet1 = meta.data.sheets.find(s => s.properties.title === 'ชีต1');
+  if (sheet1) {
+    await sheets.spreadsheets.batchUpdate({ spreadsheetId: ssId, requestBody: { requests: [{ deleteSheet: { sheetId: sheet1.properties.sheetId } }] } });
+    log('  [SK03] Deleted default "ชีต1" sheet');
+  }
+}
+
+// ─── Master orchestrator ──────────────────────────────────────────
+
+/**
+ * Create the full SK03 spreadsheet for a given month.
+ * Sequence mirrors the original three GAS scripts:
+ *   1. staff GAS  → creates spreadsheet + staff sheet + patches Supabase row_num
+ *   2. intern GAS → adds intern sheet + patches Supabase row_num
+ *   3. dep GAS    → adds one dept sheet per department
+ */
+async function createSK03(drive, sheets, supabasePersons, monthKey, supabase) {
+  const [beYearStr, monthStr] = monthKey.split('_');
+  const beYear = parseInt(beYearStr);
+  const month  = parseInt(monthStr);
+  // Sheet names derived directly from monthKey — same source as the merge step
+  const sheetBase       = monthKeyToSheetBase(monthKey);  // e.g. "ธ.ค. 68"
+  const staffSheetName  = `${sheetBase} - staff`;
+  const internSheetName = `${sheetBase} - intern`;
+  const S = 8; // first data row in overall sheets
+
+  // ── Sort people (DEPT_COLORS order → name within dept) ───────────
+  const staffArray  = [];
+  const internArray = [];
+  for (const dept of Object.keys(DEPT_COLORS)) {
+    const sorted = supabasePersons
+      .filter(p => p.department === dept)
+      .sort((a, b) => normaliseName(a.fullname).localeCompare(normaliseName(b.fullname), 'th'));
+    if (dept === 'INTERN') internArray.push(...sorted);
+    else staffArray.push(...sorted);
+  }
+
+  // ── Delete old spreadsheet + create new (mirrors staff GAS) ──────
+  const existing = await driveListAll(drive, {
+    q: `'${CONFIG.sk03FolderId}' in parents and name='sk03 - ${monthKey}' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false`,
+    fields: 'nextPageToken, files(id)', pageSize: 10,
+  });
+  for (const f of existing) { await drive.files.delete({ fileId: f.id }); log(`  [SK03] Deleted old: ${f.id}`); }
+
+  log(`  [SK03] Creating "sk03 - ${monthKey}"…`);
+  const ssId = (await drive.files.create({
+    requestBody: { name: `sk03 - ${monthKey}`, mimeType: 'application/vnd.google-apps.spreadsheet', parents: [CONFIG.sk03FolderId] },
+    fields: 'id',
+  })).data.id;
+  log(`  [SK03] id: ${ssId}`);
+
+  // ── Fetch template sheet IDs ──────────────────────────────────────
+  const tmplSheets = (await sheets.spreadsheets.get({ spreadsheetId: CONFIG.sk03TemplateId, fields: 'sheets.properties' })).data.sheets;
+  const findTmpl   = name => {
+    const s = tmplSheets.find(sh => sh.properties.title === name);
+    if (!s) throw new Error(`Template sheet "${name}" not found`);
+    return s.properties.sheetId;
+  };
+  const overallTmplId = findTmpl('overall_template');
+  const depTmplId     = findTmpl('dep_template');
+
+  // Get "ชีต1" sheetId of new spreadsheet (to delete after copying staff)
+  const ssSheets      = (await sheets.spreadsheets.get({ spreadsheetId: ssId, fields: 'sheets.properties' })).data.sheets;
+  const defaultSheetId = ssSheets[0]?.properties.sheetId;
+
+  // ══════════════════════════════════════════════════════════════════
+  //  1. Staff sheet
+  // ══════════════════════════════════════════════════════════════════
+  log(`  [SK03] Staff sheet (${staffArray.length} persons)…`);
+  const staffSheetId = (await sheets.spreadsheets.sheets.copyTo({
+    spreadsheetId: CONFIG.sk03TemplateId, sheetId: overallTmplId,
+    requestBody: { destinationSpreadsheetId: ssId },
+  })).data.sheetId;
+
+  // Rename + delete default sheet
+  await sheets.spreadsheets.batchUpdate({ spreadsheetId: ssId, requestBody: { requests: [
+    { updateSheetProperties: { properties: { sheetId: staffSheetId, title: staffSheetName }, fields: 'title' } },
+    ...(defaultSheetId != null ? [{ deleteSheet: { sheetId: defaultSheetId } }] : []),
+  ]}});
+
+  // A3 header
+  await sheets.spreadsheets.values.update({ spreadsheetId: ssId, range: `'${staffSheetName}'!A3`, valueInputOption: 'RAW', requestBody: { values: [[`ประจำเดือน  ${THAI_MONTHS[month]}  พ.ศ.  ${beYear}`]] } });
+
+  // Data rows
+  const staffRows = buildOverallRows(staffArray, S, false);
+  if (staffRows.length > 0) {
+    await sheets.spreadsheets.values.update({ spreadsheetId: ssId, range: `'${staffSheetName}'!A${S}:V${S + staffRows.length - 1}`, valueInputOption: 'USER_ENTERED', requestBody: { values: staffRows } });
+  }
+  const staffLastRow = S + staffArray.length - 1;
+
+  await writeOverallMeta(sheets, ssId, staffSheetName, staffLastRow, false, internSheetName);
+  await formatOverallSheet(sheets, ssId, staffSheetId, staffArray, staffLastRow, false);
+  await writeOverallSignature(sheets, ssId, staffSheetName, staffSheetId, staffLastRow);
+
+  // Patch Supabase row_num for staff
+  log(`  [SK03] Patching row_num for ${staffArray.length} staff…`);
+  for (let i = 0; i < staffArray.length; i++) {
+    if (staffArray[i].index == null) continue;
+    await supabase.from(monthKey).update({ row_num: S + i }).eq(SB.index, staffArray[i].index);
+  }
+
+  // ══════════════════════════════════════════════════════════════════
+  //  2. Intern sheet
+  // ══════════════════════════════════════════════════════════════════
+  log(`  [SK03] Intern sheet (${internArray.length} persons)…`);
+  const internSheetId = (await sheets.spreadsheets.sheets.copyTo({
+    spreadsheetId: CONFIG.sk03TemplateId, sheetId: overallTmplId,
+    requestBody: { destinationSpreadsheetId: ssId },
+  })).data.sheetId;
+
+  await sheets.spreadsheets.batchUpdate({ spreadsheetId: ssId, requestBody: { requests: [
+    { updateSheetProperties: { properties: { sheetId: internSheetId, title: internSheetName }, fields: 'title' } },
+  ]}});
+
+  await sheets.spreadsheets.values.update({ spreadsheetId: ssId, range: `'${internSheetName}'!A3`, valueInputOption: 'RAW', requestBody: { values: [[`ประจำเดือน  ${THAI_MONTHS[month]}  พ.ศ.  ${beYear}`]] } });
+
+  const internRows = buildOverallRows(internArray, S, true);
+  if (internRows.length > 0) {
+    await sheets.spreadsheets.values.update({ spreadsheetId: ssId, range: `'${internSheetName}'!A${S}:V${S + internRows.length - 1}`, valueInputOption: 'USER_ENTERED', requestBody: { values: internRows } });
+  }
+  const internLastRow = S + internArray.length - 1;
+
+  await writeOverallMeta(sheets, ssId, internSheetName, internLastRow, true, internSheetName);
+  await formatOverallSheet(sheets, ssId, internSheetId, internArray, internLastRow, true);
+  await writeOverallSignature(sheets, ssId, internSheetName, internSheetId, internLastRow);
+
+  // Patch Supabase row_num for intern
+  log(`  [SK03] Patching row_num for ${internArray.length} interns…`);
+  for (let i = 0; i < internArray.length; i++) {
+    if (internArray[i].index == null) continue;
+    await supabase.from(monthKey).update({ row_num: S + i }).eq(SB.index, internArray[i].index);
+  }
+
+  // ══════════════════════════════════════════════════════════════════
+  //  3. Department sheets
+  // ══════════════════════════════════════════════════════════════════
+  // Build row_num lookup: "prefix firstname  lastname" → row in staff/intern sheet
+  const rowNumMap = {};
+  staffArray.forEach( (p, i) => { rowNumMap[`${p.prefix} ${p.firstname}  ${p.lastname}`] = S + i; });
+  internArray.forEach((p, i) => { rowNumMap[`${p.prefix} ${p.firstname}  ${p.lastname}`] = S + i; });
+
+  await buildDeptSheets(sheets, ssId, depTmplId, supabasePersons, beYear, month, staffSheetName, internSheetName, rowNumMap);
+
+  log(`  [SK03] ✓ Done → https://docs.google.com/spreadsheets/d/${ssId}`);
+  return ssId;
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -638,14 +960,15 @@ async function createAndUploadSK03(drive, supabasePersons, monthInfo) {
 // ═══════════════════════════════════════════════════════════════════
 async function main() {
   const missing = [
-    ['GOOGLE_CLIENT_ID',      CONFIG.google.clientId],
-    ['GOOGLE_CLIENT_SECRET',  CONFIG.google.clientSecret],
-    ['GOOGLE_REFRESH_TOKEN',  CONFIG.google.refreshToken],
-    ['SUPABASE_URL',          CONFIG.supabase.url],
-    ['SUPABASE_KEY',          CONFIG.supabase.key],
+    ['GOOGLE_CLIENT_ID',         CONFIG.google.clientId],
+    ['GOOGLE_CLIENT_SECRET',     CONFIG.google.clientSecret],
+    ['GOOGLE_REFRESH_TOKEN',     CONFIG.google.refreshToken],
+    ['SUPABASE_URL',             CONFIG.supabase.url],
+    ['SUPABASE_KEY',             CONFIG.supabase.key],
     ['GOOGLE_ROOT_FOLDER_ID',    CONFIG.rootFolderId],
-    ['GOOGLE_MERGE_FOLDER_ID',  CONFIG.outputFolderId],
+    ['GOOGLE_MERGE_FOLDER_ID',   CONFIG.outputFolderId],
     ['GOOGLE_SK03_FOLDER_ID',    CONFIG.sk03FolderId],
+    ['GOOGLE_SK03_TEMPLATE_ID',  CONFIG.sk03TemplateId],
   ].filter(([, v]) => !v).map(([k]) => k);
 
   if (missing.length > 0) {
@@ -655,6 +978,7 @@ async function main() {
   }
 
   const drive    = createDriveClient();
+  const sheets   = createSheetsClient();
   const supabase = createClient(CONFIG.supabase.url, CONFIG.supabase.key);
   const months   = getTargetMonths();
 
@@ -692,12 +1016,12 @@ async function main() {
 
       // Step 5
       log('  [Step 5] Merging…');
-      const { uploaded: mergeUploaded } = await mergeAndUpload(drive, driveData.files, sbData, key);
-      if (!mergeUploaded) { results.skipped++; console.log('└─ skipped\n'); continue; }
+      const uploaded = await mergeAndUpload(drive, driveData.files, sbData, key);
+      if (!uploaded) { results.skipped++; console.log('└─ skipped\n'); continue; }
 
       // Step 6
-      log('  [Step 6] Building SK03…');
-      await createAndUploadSK03(drive, sbData, monthInfo);
+      log('  [Step 6] Creating SK03 spreadsheet…');
+      await createSK03(drive, sheets, sbData, key, supabase);
 
       results.processed++;
       console.log('└─ ✓ complete\n');
