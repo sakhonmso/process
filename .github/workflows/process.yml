@@ -1,4 +1,4 @@
-name: process
+name: Process Pipeline
 
 on:
   schedule:
@@ -13,31 +13,32 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Run P4P merge pipeline
+      - name: Run process pipeline
         env:
           GOOGLE_CLIENT_ID:       ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET:   ${{ secrets.GOOGLE_CLIENT_SECRET }}
           GOOGLE_REFRESH_TOKEN:   ${{ secrets.GOOGLE_REFRESH_TOKEN }}
           GOOGLE_ROOT_FOLDER_ID:  ${{ secrets.GOOGLE_ROOT_FOLDER_ID }}
-          GOOGLE_OUTPUT_FOLDER_ID: ${{ secrets.GOOGLE_OUTPUT_FOLDER_ID }}
+          GOOGLE_MERGE_FOLDER_ID:  ${{ secrets.GOOGLE_MERGE_FOLDER_ID }}
+          GOOGLE_SK03_FOLDER_ID:  ${{ secrets.GOOGLE_SK03_FOLDER_ID }}
           SUPABASE_URL:           ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY:           ${{ secrets.SUPABASE_KEY }}
         run: node process.js
 
       - name: Upload run log as artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: run-log-${{ github.run_number }}
           path: |
