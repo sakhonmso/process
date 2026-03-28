@@ -11,15 +11,15 @@
 
 require('dotenv').config();
 
-const { google }       = require('googleapis');
+const { google } = require('googleapis');
 const { createClient } = require('@supabase/supabase-js');
-const ExcelJS          = require('exceljs');
-const JSZip            = require('jszip');
-const { Readable }     = require('stream');
+const ExcelJS = require('exceljs');
+const JSZip = require('jszip');
+const { Readable } = require('stream');
 
 const CONFIG = {
   google: {
-    clientId:     process.env.GOOGLE_CLIENT_ID,
+    clientId: process.env.GOOGLE_CLIENT_ID,
     clientSecret: process.env.GOOGLE_CLIENT_SECRET,
     refreshToken: process.env.GOOGLE_REFRESH_TOKEN,
   },
@@ -27,36 +27,36 @@ const CONFIG = {
     url: process.env.SUPABASE_URL,
     key: process.env.SUPABASE_KEY,
   },
-  rootFolderId:   process.env.GOOGLE_ROOT_FOLDER_ID,    // source: year/month folders
+  rootFolderId: process.env.GOOGLE_ROOT_FOLDER_ID,    // source: year/month folders
   outputFolderId: process.env.GOOGLE_OUTPUT_FOLDER_ID,  // destination: merged files
 };
 
 const THAI_MONTHS = {
-  1:'มกราคม', 2:'กุมภาพันธ์', 3:'มีนาคม', 4:'เมษายน',
-  5:'พฤษภาคม', 6:'มิถุนายน', 7:'กรกฎาคม', 8:'สิงหาคม',
-  9:'กันยายน', 10:'ตุลาคม', 11:'พฤศจิกายน', 12:'ธันวาคม',
+  1: 'มกราคม', 2: 'กุมภาพันธ์', 3: 'มีนาคม', 4: 'เมษายน',
+  5: 'พฤษภาคม', 6: 'มิถุนายน', 7: 'กรกฎาคม', 8: 'สิงหาคม',
+  9: 'กันยายน', 10: 'ตุลาคม', 11: 'พฤศจิกายน', 12: 'ธันวาคม',
 };
 
 // Tab colours per department — keys match Supabase "department" values exactly
 const DEPT_COLORS = {
-  'INTERN':                               '#ECC1D1',
-  'กุมารเวชกรรม':                          '#C8D3B8',
-  'จักษุวิทยา':                            '#EEE7D3',
-  'จิตเวชและยาเสพติด':                     '#D9B4E2',
-  'นิติเวช':                               '#B1D1E3',
-  'ผู้ป่วยนอก':                             '#EAD7C3',
-  'พยาธิวิทยากายวิภาค':                    '#BEAFE1',
-  'รังสีวิทยา':                             '#B0E0E6',
-  'วิสัญญีวิทยา':                           '#FFFAE6',
-  'ศัลยกรรม':                              '#FFE5EC',
-  'ศัลยกรรมออร์โธปิดิกส์':                  '#CFDFEF',
-  'สูติ-นรีเวชกรรม':                        '#F9ECD9',
-  'อาชีวเวชกรรม':                           '#FFDDE4',
-  'อายุรกรรม':                              '#A3DDBD',
-  'เทคนิคการแพทย์และพยาธิวิทยาคลินิก':     '#F7D5C2',
-  'เวชกรรมฟื้นฟู':                          '#F3BBDC',
-  'เวชศาสตร์ฉุกเฉิน':                       '#9ACFC4',
-  'โสต ศอ นาสิก':                           '#FADA5E',
+  'กุมารเวชกรรม': '#C8D3B8',
+  'จักษุวิทยา': '#EEE7D3',
+  'จิตเวชและยาเสพติด': '#D9B4E2',
+  'เทคนิคการแพทย์และพยาธิวิทยาคลินิก': '#F7D5C2',
+  'นิติเวช': '#B1D1E3',
+  'พยาธิวิทยากายวิภาค': '#BEAFE1',
+  'ผู้ป่วยนอก': '#EAD7C3',
+  'รังสีวิทยา': '#B0E0E6',
+  'วิสัญญีวิทยา': '#FFFAE6',
+  'เวชกรรมฟื้นฟู': '#F3BBDC',
+  'เวชศาสตร์ฉุกเฉิน': '#9ACFC4',
+  'ศัลยกรรม': '#FFE5EC',
+  'ศัลยกรรมออร์โธปิดิกส์': '#CFDFEF',
+  'สูติ-นรีเวชกรรม': '#F9ECD9',
+  'โสต ศอ นาสิก': '#FADA5E',
+  'อาชีวเวชกรรม': '#FFDDE4',
+  'อายุรกรรม': '#A3DDBD',
+  'INTERN': '#ECC1D1'
 };
 
 /**
@@ -76,13 +76,13 @@ function hexToArgb(hex) {
  * Years are in Buddhist Era (CE + 543).
  */
 function getTargetMonths() {
-  const now    = new Date();
+  const now = new Date();
   const result = [];
   for (let i = 0; i < 6; i++) {
-    const d      = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
     const beYear = d.getFullYear() + 543;
-    const month  = d.getMonth() + 1; // 1–12
-    const key    = `${beYear}_${String(month).padStart(2, '0')}`;
+    const month = d.getMonth() + 1; // 1–12
+    const key = `${beYear}_${String(month).padStart(2, '0')}`;
     result.push({ key, beYear, month });
   }
   return result;
@@ -184,10 +184,10 @@ async function uploadFileToDrive(drive, folderId, fileName, buffer) {
     }
     log(`  [Drive] Overwriting existing file: "${fileName}" (id: ${first.id})`);
     const res = await drive.files.update({
-      fileId:      first.id,
+      fileId: first.id,
       requestBody: { name: fileName },
-      media:       { mimeType: mime, body: Readable.from([buffer]) },
-      fields:      'id, name, webViewLink',
+      media: { mimeType: mime, body: Readable.from([buffer]) },
+      fields: 'id, name, webViewLink',
     });
     return res.data;
   }
@@ -195,8 +195,8 @@ async function uploadFileToDrive(drive, folderId, fileName, buffer) {
   // No existing file — create new
   const res = await drive.files.create({
     requestBody: { name: fileName, parents: [folderId], mimeType: mime },
-    media:       { mimeType: mime, body: Readable.from([buffer]) },
-    fields:      'id, name, webViewLink',
+    media: { mimeType: mime, body: Readable.from([buffer]) },
+    fields: 'id, name, webViewLink',
   });
   return res.data;
 }
@@ -204,17 +204,17 @@ async function uploadFileToDrive(drive, folderId, fileName, buffer) {
 // ── STEP 2 ────────────────────────────────────────────────────────
 async function getDriveMonthData(drive, { beYear, month }) {
   const yearFolders = await listFolders(drive, CONFIG.rootFolderId);
-  const yearFolder  = yearFolders.find(f => f.name === String(beYear));
+  const yearFolder = yearFolders.find(f => f.name === String(beYear));
   if (!yearFolder) {
     log(`  [Drive] Year folder "${beYear}" not found → skipping`, 'warn');
     return null;
   }
 
   // FIX #5: try both zero-padded and plain month numbers
-  const thai      = THAI_MONTHS[month];
-  const candidates = [`${month} - ${thai}`, `${String(month).padStart(2,'0')} - ${thai}`];
+  const thai = THAI_MONTHS[month];
+  const candidates = [`${month} - ${thai}`, `${String(month).padStart(2, '0')} - ${thai}`];
   const monthFolders = await listFolders(drive, yearFolder.id);
-  const monthFolder  = monthFolders.find(f => candidates.includes(f.name));
+  const monthFolder = monthFolders.find(f => candidates.includes(f.name));
   if (!monthFolder) {
     log(`  [Drive] Month folder not found (tried: ${candidates.join(' | ')}) → skipping`, 'warn');
     return null;
@@ -247,7 +247,7 @@ async function getSupabaseMonthData(supabase, tableKey) {
   }
   return data.map(r => ({
     // FIX #3: trim each field before joining; guard nulls
-    fullname:   normaliseName(`${r.firstname ?? ''} ${r.lastname ?? ''}`),
+    fullname: normaliseName(`${r.firstname ?? ''} ${r.lastname ?? ''}`),
     department: (r.department ?? '').trim(),
   }));
 }
@@ -256,12 +256,12 @@ async function getSupabaseMonthData(supabase, tableKey) {
 function listsMatch(driveNames, supabasePersons) {
   // FIX #4: normalise both sides before any comparison
   const normDrive = driveNames.map(normaliseName);
-  const normSB    = supabasePersons.map(p => normaliseName(p.fullname));
+  const normSB = supabasePersons.map(p => normaliseName(p.fullname));
 
   if (normDrive.length !== normSB.length) {
     log(`  [Compare] Length mismatch — Drive: ${normDrive.length}, Supabase: ${normSB.length}`, 'warn');
-    normDrive.forEach(n => { if (!normSB.includes(n))   log(`    ✗ In Drive but not Supabase: "${n}"`, 'warn'); });
-    normSB.forEach(n   => { if (!normDrive.includes(n)) log(`    ✗ In Supabase but not Drive: "${n}"`, 'warn'); });
+    normDrive.forEach(n => { if (!normSB.includes(n)) log(`    ✗ In Drive but not Supabase: "${n}"`, 'warn'); });
+    normSB.forEach(n => { if (!normDrive.includes(n)) log(`    ✗ In Supabase but not Drive: "${n}"`, 'warn'); });
     return false;
   }
 
@@ -294,7 +294,7 @@ function isSheetEmpty(ws) {
  *         (e.g. comparison: A1>0) are also matched and removed.
  */
 async function stripFormulas(buffer) {
-  const zip        = await JSZip.loadAsync(buffer);
+  const zip = await JSZip.loadAsync(buffer);
   const sheetPaths = Object.keys(zip.files).filter(
     p => /^xl\/worksheets\/sheet\d+\.xml$/.test(p),
   );
@@ -311,7 +311,7 @@ async function stripFormulas(buffer) {
 
 async function loadWorkbook(buffer) {
   const cleaned = await stripFormulas(buffer);
-  const wb      = new ExcelJS.Workbook();
+  const wb = new ExcelJS.Workbook();
   await wb.xlsx.load(cleaned);
   return wb;
 }
@@ -325,9 +325,9 @@ function resolveCellValue(v) {
   if (v instanceof Date) return v;
   if (typeof v === 'object') {
     if ('richText' in v) return v;              // keep rich-text object — ExcelJS writes it correctly
-    if ('text'     in v) return v.text;         // hyperlink → plain text
-    if ('result'   in v) return v.result;       // cached formula result
-    if ('error'    in v) return null;           // formula error → blank
+    if ('text' in v) return v.text;         // hyperlink → plain text
+    if ('result' in v) return v.result;       // cached formula result
+    if ('error' in v) return null;           // formula error → blank
   }
   return v;
 }
@@ -344,9 +344,9 @@ function copyWorksheet(srcWS, dstWS) {
   // ── Column widths / properties ──────────────────────────────────
   srcWS.columns.forEach((srcCol, idx) => {
     const dstCol = dstWS.getColumn(idx + 1);
-    if (srcCol.width)        dstCol.width        = srcCol.width;
-    if (srcCol.hidden)       dstCol.hidden        = srcCol.hidden;
-    if (srcCol.outlineLevel) dstCol.outlineLevel  = srcCol.outlineLevel;
+    if (srcCol.width) dstCol.width = srcCol.width;
+    if (srcCol.hidden) dstCol.hidden = srcCol.hidden;
+    if (srcCol.outlineLevel) dstCol.outlineLevel = srcCol.outlineLevel;
   });
 
   // ── Rows + cells ────────────────────────────────────────────────
@@ -354,8 +354,8 @@ function copyWorksheet(srcWS, dstWS) {
     const dstRow = dstWS.getRow(rowNumber);
 
     // Row-level properties
-    if (srcRow.height)  dstRow.height  = srcRow.height;
-    if (srcRow.hidden)  dstRow.hidden  = srcRow.hidden;
+    if (srcRow.height) dstRow.height = srcRow.height;
+    if (srcRow.hidden) dstRow.hidden = srcRow.hidden;
     if (srcRow.outlineLevel) dstRow.outlineLevel = srcRow.outlineLevel;
 
     srcRow.eachCell({ includeEmpty: true }, (srcCell, colNumber) => {
@@ -385,7 +385,7 @@ function sortByDeptThenName(a, b, deptMap) {
   // FIX #10: look up by normName (normalised) so deptMap always hits
   const dA = (deptMap[a.normName] ?? '').toLowerCase();
   const dB = (deptMap[b.normName] ?? '').toLowerCase();
-  if (dA === 'intern' && dB !== 'intern') return  1;
+  if (dA === 'intern' && dB !== 'intern') return 1;
   if (dA !== 'intern' && dB === 'intern') return -1;
   if (dA !== dB) return dA.localeCompare(dB, 'th');
   return a.normName.localeCompare(b.normName, 'th');
@@ -405,18 +405,18 @@ async function mergeAndUpload(drive, driveFiles, supabasePersons, monthKey) {
 
   log('\n  [Merge] Sorted order:');
   filesWithName.forEach((f, i) => {
-    log(`    ${String(i+1).padStart(2)}. ${f.origName.padEnd(32)} [${deptMap[f.normName] ?? '?'}]`);
+    log(`    ${String(i + 1).padStart(2)}. ${f.origName.padEnd(32)} [${deptMap[f.normName] ?? '?'}]`);
   });
 
-  const mergedWB       = new ExcelJS.Workbook();
+  const mergedWB = new ExcelJS.Workbook();
   const usedSheetNames = new Set();
-  let   totalRows      = 0;
-  let   sheetCount     = 0;
+  let totalRows = 0;
+  let sheetCount = 0;
 
   for (const file of filesWithName) {
     log(`\n  [Merge] ↓ ${file.origName}`);
     const buffer = await downloadFile(drive, file.id);
-    const wb     = await loadWorkbook(buffer);
+    const wb = await loadWorkbook(buffer);
 
     let targetWS = null;
     for (const ws of wb.worksheets) {
@@ -437,9 +437,9 @@ async function mergeAndUpload(drive, driveFiles, supabasePersons, monthKey) {
     }
     usedSheetNames.add(sheetName);
 
-    const dept     = deptMap[file.normName] ?? '';
-    const tabArgb  = hexToArgb(DEPT_COLORS[dept]);
-    const outWS    = mergedWB.addWorksheet(sheetName, {
+    const dept = deptMap[file.normName] ?? '';
+    const tabArgb = hexToArgb(DEPT_COLORS[dept]);
+    const outWS = mergedWB.addWorksheet(sheetName, {
       properties: tabArgb ? { tabColor: { argb: tabArgb } } : {},
     });
     sheetCount++;
@@ -457,7 +457,7 @@ async function mergeAndUpload(drive, driveFiles, supabasePersons, monthKey) {
   }
 
   const outputBuffer = await mergedWB.xlsx.writeBuffer();
-  const outputName   = `merged_${monthKey}.xlsx`;
+  const outputName = `merged_${monthKey}.xlsx`;
 
   log(`\n  [Merge] Uploading "${outputName}" — ${sheetCount} sheets, ${totalRows} data rows…`);
   const uploaded = await uploadFileToDrive(drive, CONFIG.outputFolderId, outputName, outputBuffer);
@@ -469,13 +469,13 @@ async function mergeAndUpload(drive, driveFiles, supabasePersons, monthKey) {
 // ── MAIN ──────────────────────────────────────────────────────────
 async function main() {
   const missing = [
-    ['GOOGLE_CLIENT_ID',      CONFIG.google.clientId],
-    ['GOOGLE_CLIENT_SECRET',  CONFIG.google.clientSecret],
-    ['GOOGLE_REFRESH_TOKEN',  CONFIG.google.refreshToken],
-    ['SUPABASE_URL',          CONFIG.supabase.url],
-    ['SUPABASE_KEY',          CONFIG.supabase.key],
-    ['GOOGLE_ROOT_FOLDER_ID',    CONFIG.rootFolderId],
-    ['GOOGLE_OUTPUT_FOLDER_ID',  CONFIG.outputFolderId],
+    ['GOOGLE_CLIENT_ID', CONFIG.google.clientId],
+    ['GOOGLE_CLIENT_SECRET', CONFIG.google.clientSecret],
+    ['GOOGLE_REFRESH_TOKEN', CONFIG.google.refreshToken],
+    ['SUPABASE_URL', CONFIG.supabase.url],
+    ['SUPABASE_KEY', CONFIG.supabase.key],
+    ['GOOGLE_ROOT_FOLDER_ID', CONFIG.rootFolderId],
+    ['GOOGLE_OUTPUT_FOLDER_ID', CONFIG.outputFolderId],
   ].filter(([, v]) => !v).map(([k]) => k);
 
   if (missing.length > 0) {
@@ -484,9 +484,9 @@ async function main() {
     process.exit(1);
   }
 
-  const drive    = createDriveClient();
+  const drive = createDriveClient();
   const supabase = createClient(CONFIG.supabase.url, CONFIG.supabase.key);
-  const months   = getTargetMonths();
+  const months = getTargetMonths();
 
   console.log('══════════════════════════════════════════════════════');
   console.log(' P4P Excel Merge Pipeline');
