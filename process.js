@@ -113,7 +113,8 @@ const DEPT_ORDER_MAX = Object.keys(DEPT_COLORS).length;
 const SB = {
   prefix:    'prefix',
   position:  'position',
-  level:     'level',           // rank in GAS
+  level:     'level',
+  rank:      'rank',            // col F in staff sheet and col C suffix in dept sheets
   emp_type:  'employee_type',   // type in GAS
   std:       'standard_score',
   boss:      'boss_score',
@@ -305,6 +306,7 @@ async function getSupabaseMonthData(supabase, tableKey) {
     prefix:     sbVal(r, SB.prefix,   ''),
     position:   sbVal(r, SB.position, 'นายแพทย์'),
     level:      sbVal(r, SB.level,    ''),
+    rank:       sbVal(r, SB.rank,     ''),
     emp_type:   sbVal(r, SB.emp_type, 'ข้าราชการ'),
     std_score:  sbVal(r, SB.std,      2200),
     boss_score: sbVal(r, SB.boss,     0),
@@ -509,7 +511,7 @@ function buildOverallRows(persons, S, isIntern) {
       p.firstname || '',                                     // C
       p.lastname  || '',                                     // D
       p.position  || 'นายแพทย์',                            // E
-      p.level     || '',                                     // F: rank
+      p.rank      || '',                                     // F: rank (supabase 'rank')
       p.emp_type  || '',                                     // G: type
       p.std_score  ?? 2200,                                  // H
       (getMgmt(p)?.amount ?? p.boss_score ?? 0),             // I: mgmt amount or boss score
@@ -602,7 +604,9 @@ async function formatOverallSheet(sheets, ssId, sheetId, persons, lastRow, isInt
 
   const fmtReqs = [];
 
-  // J column (idx 9) background per dept per row
+  const WHITE = { red: 1, green: 1, blue: 1 };
+
+  // J column (idx 9): apply dept colour per data row only
   persons.forEach((p, idx) => {
     const hex = DEPT_COLORS[p.department];
     if (!hex) return;
@@ -614,6 +618,15 @@ async function formatOverallSheet(sheets, ssId, sheetId, persons, lastRow, isInt
         fields: 'userEnteredFormat.backgroundColor',
       },
     });
+  });
+
+  // Clear J background for rows after last person (template may have residual colours)
+  fmtReqs.push({
+    repeatCell: {
+      range: gridRange(sheetId, RLast + 1, 9, RLast + 20, 9),
+      cell: { userEnteredFormat: { backgroundColor: WHITE } },
+      fields: 'userEnteredFormat.backgroundColor',
+    },
   });
 
   // Number formats
@@ -754,7 +767,7 @@ async function buildDeptSheets(sheets, ssId, depTmplSheetId, allPersons, beYear,
       return [
         idx + 1,
         `${p.prefix} ${p.firstname}  ${p.lastname}`,  // double space before lastname
-        `${p.position}${p.level}`,                     // concatenated, no separator
+        `${p.position}${p.rank}`,                      // position + rank (supabase 'rank')
         p.emp_type || '',
         mgmt?.amount ?? 0,   // E: management amount (or 0)
         0, 0, ' ',
@@ -967,16 +980,25 @@ async function createSK03(drive, sheets, supabasePersons, monthKey, supabase) {
   const staffTotalRowMatch = staffTotalRowRange.match(/:?[A-Z](\d+)$/);
   const staffTotalRow = staffTotalRowMatch ? parseInt(staffTotalRowMatch[1]) : staffLastRow + 1;
 
-  // Paint M:O of the totals row red
+  // Paint M:O of the totals row red; clear M:O below it (template residual colours)
   await sheets.spreadsheets.batchUpdate({
     spreadsheetId: ssId,
-    requestBody: { requests: [{
-      repeatCell: {
-        range: gridRange(staffSheetId, staffTotalRow - 1, 12, staffTotalRow - 1, 14), // M:O (0-based cols 12-14)
-        cell: { userEnteredFormat: { backgroundColor: RED } },
-        fields: 'userEnteredFormat.backgroundColor',
+    requestBody: { requests: [
+      {
+        repeatCell: {
+          range: gridRange(staffSheetId, staffTotalRow - 1, 12, staffTotalRow - 1, 14),
+          cell: { userEnteredFormat: { backgroundColor: RED } },
+          fields: 'userEnteredFormat.backgroundColor',
+        },
       },
-    }]},
+      {
+        repeatCell: {
+          range: gridRange(staffSheetId, staffTotalRow, 12, staffTotalRow + 19, 14),
+          cell: { userEnteredFormat: { backgroundColor: { red: 1, green: 1, blue: 1 } } },
+          fields: 'userEnteredFormat.backgroundColor',
+        },
+      },
+    ]},
   });
 
   await writeOverallSignature(sheets, ssId, staffSheetName, staffSheetId, staffTotalRow);
@@ -1030,13 +1052,22 @@ async function createSK03(drive, sheets, supabasePersons, monthKey, supabase) {
 
   await sheets.spreadsheets.batchUpdate({
     spreadsheetId: ssId,
-    requestBody: { requests: [{
-      repeatCell: {
-        range: gridRange(internSheetId, internTotalRow - 1, 13, internTotalRow - 1, 14), // N:O (cols 13-14)
-        cell: { userEnteredFormat: { backgroundColor: RED } },
-        fields: 'userEnteredFormat.backgroundColor',
+    requestBody: { requests: [
+      {
+        repeatCell: {
+          range: gridRange(internSheetId, internTotalRow - 1, 13, internTotalRow - 1, 14),
+          cell: { userEnteredFormat: { backgroundColor: RED } },
+          fields: 'userEnteredFormat.backgroundColor',
+        },
       },
-    }]},
+      {
+        repeatCell: {
+          range: gridRange(internSheetId, internTotalRow, 13, internTotalRow + 19, 14),
+          cell: { userEnteredFormat: { backgroundColor: { red: 1, green: 1, blue: 1 } } },
+          fields: 'userEnteredFormat.backgroundColor',
+        },
+      },
+    ]},
   });
 
   await writeOverallSignature(sheets, ssId, internSheetName, internSheetId, internTotalRow);
