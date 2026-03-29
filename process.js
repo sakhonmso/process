@@ -932,8 +932,6 @@ async function createSK03(drive, sheets, supabasePersons, monthKey, supabase) {
   await sheets.spreadsheets.batchUpdate({ spreadsheetId: ssId, requestBody: { requests: [
     { updateSheetProperties: { properties: { sheetId: staffSheetId, title: staffSheetName }, fields: 'title' } },
     ...(defaultSheetId != null ? [{ deleteSheet: { sheetId: defaultSheetId } }] : []),
-    // Extend grid immediately — data rows + totals + 6 blanks + 2 sig rows must all fit
-    { appendDimension: { sheetId: staffSheetId, dimension: 'ROWS', length: 50 } },
   ]}});
 
   // A3 header
@@ -949,21 +947,32 @@ async function createSK03(drive, sheets, supabasePersons, monthKey, supabase) {
   await writeOverallMeta(sheets, ssId, staffSheetName, staffLastRow, false, internSheetName);
   await formatOverallSheet(sheets, ssId, staffSheetId, staffArray, staffLastRow, false);
 
-  // Totals row: N and O = SUM of all persons, red background
-  const staffTotalRow = staffLastRow + 1;
+  // Totals row: M, N, O = SUM immediately below last person, above signature.
+  // Use values.append so it auto-extends the grid — no grid limit errors.
   const RED = { red: 0.933, green: 0.294, blue: 0.169 }; // #EE4B2B
+  const totalsRow = Array.from({ length: 26 }, () => '');  // 26 blank cells (cols A-Z)
+  totalsRow[12] = `=SUM(M${S}:M${staffLastRow})`;  // col M (idx 12)
+  totalsRow[13] = `=SUM(N${S}:N${staffLastRow})`;  // col N (idx 13)
+  totalsRow[14] = `=SUM(O${S}:O${staffLastRow})`;  // col O (idx 14)
 
-  await sheets.spreadsheets.values.update({
+  const appendRes = await sheets.spreadsheets.values.append({
     spreadsheetId: ssId,
-    range: `'${staffSheetName}'!N${staffTotalRow}:O${staffTotalRow}`,
+    range: `'${staffSheetName}'!A${staffLastRow + 1}`,
     valueInputOption: 'USER_ENTERED',
-    requestBody: { values: [[`=SUM(N${S}:N${staffLastRow})`, `=SUM(O${S}:O${staffLastRow})`]] },
+    insertDataOption: 'INSERT_ROWS',
+    requestBody: { values: [totalsRow] },
   });
+  // Find the actual row number appended (1-based)
+  const staffTotalRowRange = appendRes.data.updates?.updatedRange ?? '';
+  const staffTotalRowMatch = staffTotalRowRange.match(/:?[A-Z](\d+)$/);
+  const staffTotalRow = staffTotalRowMatch ? parseInt(staffTotalRowMatch[1]) : staffLastRow + 1;
+
+  // Paint M:O of the totals row red
   await sheets.spreadsheets.batchUpdate({
     spreadsheetId: ssId,
     requestBody: { requests: [{
       repeatCell: {
-        range: gridRange(staffSheetId, staffTotalRow - 1, 13, staffTotalRow - 1, 14), // N:O (0-based cols 13-14)
+        range: gridRange(staffSheetId, staffTotalRow - 1, 12, staffTotalRow - 1, 14), // M:O (0-based cols 12-14)
         cell: { userEnteredFormat: { backgroundColor: RED } },
         fields: 'userEnteredFormat.backgroundColor',
       },
@@ -990,8 +999,6 @@ async function createSK03(drive, sheets, supabasePersons, monthKey, supabase) {
 
   await sheets.spreadsheets.batchUpdate({ spreadsheetId: ssId, requestBody: { requests: [
     { updateSheetProperties: { properties: { sheetId: internSheetId, title: internSheetName }, fields: 'title' } },
-    // Extend grid before any data writing
-    { appendDimension: { sheetId: internSheetId, dimension: 'ROWS', length: 50 } },
   ]}});
 
   await sheets.spreadsheets.values.update({ spreadsheetId: ssId, range: `'${internSheetName}'!A3`, valueInputOption: 'RAW', requestBody: { values: [[`ประจำเดือน  ${THAI_MONTHS[month]}  พ.ศ.  ${beYear}`]] } });
@@ -1005,7 +1012,34 @@ async function createSK03(drive, sheets, supabasePersons, monthKey, supabase) {
   await writeOverallMeta(sheets, ssId, internSheetName, internLastRow, true, internSheetName);
   await formatOverallSheet(sheets, ssId, internSheetId, internArray, internLastRow, true);
 
-  await writeOverallSignature(sheets, ssId, internSheetName, internSheetId, internLastRow);
+  // Intern totals row: N and O only (no M — management fee not applicable for interns)
+  const internTotalsRow = Array.from({ length: 26 }, () => '');
+  internTotalsRow[13] = `=SUM(N${S}:N${internLastRow})`;  // col N (idx 13)
+  internTotalsRow[14] = `=SUM(O${S}:O${internLastRow})`;  // col O (idx 14)
+
+  const internAppendRes = await sheets.spreadsheets.values.append({
+    spreadsheetId: ssId,
+    range: `'${internSheetName}'!A${internLastRow + 1}`,
+    valueInputOption: 'USER_ENTERED',
+    insertDataOption: 'INSERT_ROWS',
+    requestBody: { values: [internTotalsRow] },
+  });
+  const internTotalRowRange = internAppendRes.data.updates?.updatedRange ?? '';
+  const internTotalRowMatch = internTotalRowRange.match(/:?[A-Z](\d+)$/);
+  const internTotalRow = internTotalRowMatch ? parseInt(internTotalRowMatch[1]) : internLastRow + 1;
+
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId: ssId,
+    requestBody: { requests: [{
+      repeatCell: {
+        range: gridRange(internSheetId, internTotalRow - 1, 13, internTotalRow - 1, 14), // N:O (cols 13-14)
+        cell: { userEnteredFormat: { backgroundColor: RED } },
+        fields: 'userEnteredFormat.backgroundColor',
+      },
+    }]},
+  });
+
+  await writeOverallSignature(sheets, ssId, internSheetName, internSheetId, internTotalRow);
 
   // Patch Supabase row_num for intern
   log(`  [SK03] Patching row_num for ${internArray.length} interns…`);
