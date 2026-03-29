@@ -175,6 +175,35 @@ function log(msg, level = 'info') {
   (level === 'warn' ? console.error : console.log)((level === 'warn' ? '⚠  ' : '') + msg);
 }
 
+/** ms delay */
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+/**
+ * Retry an async fn on Google quota (429) or server (5xx) errors.
+ * Exponential backoff starting at 3 s, capped at 60 s.
+ */
+async function withRetry(fn, maxRetries = 7) {
+  let delay = 3000;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      const status  = err?.response?.status ?? err?.status ?? 0;
+      const msg     = err?.message ?? '';
+      const isQuota = status === 429 || msg.includes('Quota exceeded') || msg.includes('RESOURCE_EXHAUSTED');
+      const isServer = status >= 500 && status < 600;
+      if ((isQuota || isServer) && attempt < maxRetries) {
+        const wait = delay + Math.random() * 1000;
+        log(`  [Retry] ${isQuota ? 'Quota' : 'Server'} — waiting ${(wait/1000).toFixed(1)}s (attempt ${attempt+1}/${maxRetries})`, 'warn');
+        await sleep(wait);
+        delay = Math.min(delay * 2, 60000);
+      } else {
+        throw err;
+      }
+    }
+  }
+}
+
 function sbVal(row, colName, defaultVal = null) {
   const v = row[colName];
   return (v !== null && v !== undefined && v !== '') ? v : defaultVal;
@@ -574,7 +603,7 @@ async function writeOverallMeta(sheets, ssId, sheetName, lastRow, isIntern, inte
         { range: `'${sheetName}'!X23:Y23`, values: [['=Y9-Y19', '']] },
       ];
 
-  await sheets.spreadsheets.values.batchUpdate({
+  await withRetry(() => sheets.spreadsheets.values.batchUpdate({
     spreadsheetId: ssId,
     requestBody: {
       valueInputOption: 'USER_ENTERED',
@@ -584,7 +613,7 @@ async function writeOverallMeta(sheets, ssId, sheetName, lastRow, isIntern, inte
         ...panelData,
       ],
     },
-  });
+  }));
 }
 
 /**
@@ -662,7 +691,7 @@ async function formatOverallSheet(sheets, ssId, sheetId, persons, lastRow, isInt
     fmtReqs.push({ mergeCells: { range: gridRange(sheetId, 22, 23, 22, 24), mergeType: 'MERGE_ALL' } });
   }
 
-  await sheets.spreadsheets.batchUpdate({ spreadsheetId: ssId, requestBody: { requests: fmtReqs } });
+  await withRetry(() => sheets.spreadsheets.batchUpdate({ spreadsheetId: ssId, requestBody: { requests: fmtReqs } }));
 }
 
 /**
@@ -671,17 +700,17 @@ async function formatOverallSheet(sheets, ssId, sheetId, persons, lastRow, isInt
  */
 async function writeOverallSignature(sheets, ssId, sheetName, sheetId, lastRow) {
   const blankRows = Array.from({ length: 6 }, () => Array.from({ length: 26 }, () => ' '));
-  await sheets.spreadsheets.values.append({
+  await withRetry(() => sheets.spreadsheets.values.append({
     spreadsheetId: ssId,
     range: `'${sheetName}'!A${lastRow + 1}`,
     valueInputOption: 'RAW',
     requestBody: { values: blankRows },
-  });
+  }));
 
   const sig1 = lastRow + 4;
   const sig2 = lastRow + 5;
 
-  await sheets.spreadsheets.values.batchUpdate({
+  await withRetry(() => sheets.spreadsheets.values.batchUpdate({
     spreadsheetId: ssId,
     requestBody: {
       valueInputOption: 'RAW',
@@ -690,9 +719,9 @@ async function writeOverallSignature(sheets, ssId, sheetName, sheetId, lastRow) 
         { range: `'${sheetName}'!A${sig2}`, values: [['(.....................................................................................................................................)']] },
       ],
     },
-  });
+  }));
 
-  await sheets.spreadsheets.batchUpdate({
+  await withRetry(() => sheets.spreadsheets.batchUpdate({
     spreadsheetId: ssId,
     requestBody: {
       requests: [
@@ -705,7 +734,7 @@ async function writeOverallSignature(sheets, ssId, sheetName, sheetId, lastRow) 
         }},
       ],
     },
-  });
+  }));
 }
 
 // ─── Department sheets ─────────────────────────────────────────────
@@ -727,18 +756,20 @@ async function buildDeptSheets(sheets, ssId, depTmplSheetId, allPersons, beYear,
       .sort((a, b) => normaliseName(a.fullname).localeCompare(normaliseName(b.fullname), 'th'));
 
     if (persons.length === 0) continue;
+    // Brief pause between dept sheets to avoid write-quota exhaustion
+    await sleep(1000);
     log(`  [SK03] Dept sheet: "${dept}" (${persons.length})`);
 
     // Copy dep_template
-    const copyRes = await sheets.spreadsheets.sheets.copyTo({
+    const copyRes = await withRetry(() => sheets.spreadsheets.sheets.copyTo({
       spreadsheetId: CONFIG.sk03TemplateId, sheetId: depTmplSheetId,
       requestBody: { destinationSpreadsheetId: ssId },
-    });
+    }));
     const sheetId = copyRes.data.sheetId;
 
     // Rename + tab colour
     const rgb = DEPT_COLORS[dept] ? hexToRgb(DEPT_COLORS[dept]) : null;
-    await sheets.spreadsheets.batchUpdate({
+    await withRetry(() => sheets.spreadsheets.batchUpdate({
       spreadsheetId: ssId,
       requestBody: { requests: [{
         updateSheetProperties: {
@@ -746,10 +777,10 @@ async function buildDeptSheets(sheets, ssId, depTmplSheetId, allPersons, beYear,
           fields: rgb ? 'title,tabColorStyle' : 'title',
         },
       }]},
-    });
+    }));
 
     // Header: A2 = month/year, A3 = dept name (mirrors GAS)
-    await sheets.spreadsheets.values.batchUpdate({
+    await withRetry(() => sheets.spreadsheets.values.batchUpdate({
       spreadsheetId: ssId,
       requestBody: {
         valueInputOption: 'RAW',
@@ -758,7 +789,7 @@ async function buildDeptSheets(sheets, ssId, depTmplSheetId, allPersons, beYear,
           { range: `'${dept}'!A3`, values: [[`หน่วยงาน  ${dept} กลุ่มภารกิจ ด้านตติยภูมิ`]] },
         ],
       },
-    });
+    }));
 
     // Data rows: [count, "prefix firstname  lastname", "position+rank", type, 0, 0, 0, " ", " "]
     // Note: double space before lastname — this is the key for rowNumMap lookup
@@ -774,12 +805,12 @@ async function buildDeptSheets(sheets, ssId, depTmplSheetId, allPersons, beYear,
         mgmt?.remark ?? ' ', // I: remark
       ];
     });
-    await sheets.spreadsheets.values.append({
+    await withRetry(() => sheets.spreadsheets.values.append({
       spreadsheetId: ssId,
       range: `'${dept}'!A${D}`,
       valueInputOption: 'USER_ENTERED',
       requestBody: { values: rows },
-    });
+    }));
 
     const lastRow      = D + persons.length - 1;
     const isInternDept = dept === 'INTERN';
@@ -810,16 +841,16 @@ async function buildDeptSheets(sheets, ssId, depTmplSheetId, allPersons, beYear,
       }
     }
     if (formulaData.length > 0) {
-      await sheets.spreadsheets.values.batchUpdate({
+      await withRetry(() => sheets.spreadsheets.values.batchUpdate({
         spreadsheetId: ssId,
         requestBody: { valueInputOption: 'USER_ENTERED', data: formulaData },
-      });
+      }));
     }
 
     // Borders + number format (mirrors GAS dep: A6:I with inner, E6:G number format)
     const R_S = D - 1; // 0-based data start
     const R_E = lastRow - 1;
-    await sheets.spreadsheets.batchUpdate({
+    await withRetry(() => sheets.spreadsheets.batchUpdate({
       spreadsheetId: ssId,
       requestBody: { requests: [
         bordersReq(sheetId, R_S, 0, R_E, 8, true),
@@ -829,20 +860,20 @@ async function buildDeptSheets(sheets, ssId, depTmplSheetId, allPersons, beYear,
             fields: 'userEnteredFormat.numberFormat',
         }},
       ]},
-    });
+    }));
 
     // 5 blank rows then signatures at lastRow+3 (two sections) and lastRow+5 (one)
     const blankRows = Array.from({ length: 5 }, () => Array.from({ length: 10 }, () => ' '));
-    await sheets.spreadsheets.values.append({
+    await withRetry(() => sheets.spreadsheets.values.append({
       spreadsheetId: ssId,
       range: `'${dept}'!A${lastRow + 1}`,
       valueInputOption: 'RAW',
       requestBody: { values: blankRows },
-    });
+    }));
 
     const sig1 = lastRow + 3;
     const sig2 = lastRow + 5;
-    await sheets.spreadsheets.values.batchUpdate({
+    await withRetry(() => sheets.spreadsheets.values.batchUpdate({
       spreadsheetId: ssId,
       requestBody: {
         valueInputOption: 'RAW',
@@ -852,8 +883,8 @@ async function buildDeptSheets(sheets, ssId, depTmplSheetId, allPersons, beYear,
           { range: `'${dept}'!A${sig2}`, values: [['................................................................................................................ประธานคณะกรรมการตรวจสอบค่าคะแนน']] },
         ],
       },
-    });
-    await sheets.spreadsheets.batchUpdate({
+    }));
+    await withRetry(() => sheets.spreadsheets.batchUpdate({
       spreadsheetId: ssId,
       requestBody: { requests: [
         { mergeCells: { range: gridRange(sheetId, sig1-1, 0, sig1-1, 3), mergeType: 'MERGE_ALL' } }, // A:D
@@ -862,14 +893,14 @@ async function buildDeptSheets(sheets, ssId, depTmplSheetId, allPersons, beYear,
         { repeatCell: { range: gridRange(sheetId, sig1-1, 0, sig1-1, 8), cell: { userEnteredFormat: { horizontalAlignment: 'CENTER', textFormat: { bold: true } } }, fields: 'userEnteredFormat(horizontalAlignment,textFormat)' } },
         { repeatCell: { range: gridRange(sheetId, sig2-1, 0, sig2-1, 8), cell: { userEnteredFormat: { horizontalAlignment: 'CENTER', textFormat: { bold: true } } }, fields: 'userEnteredFormat(horizontalAlignment,textFormat)' } },
       ]},
-    });
+    }));
   }
 
   // Delete "ชีต1" if still present (created with the spreadsheet, normally deleted in staff step)
-  const meta   = await sheets.spreadsheets.get({ spreadsheetId: ssId, fields: 'sheets.properties' });
+  const meta   = await withRetry(() => sheets.spreadsheets.get({ spreadsheetId: ssId, fields: 'sheets.properties' }));
   const sheet1 = meta.data.sheets.find(s => s.properties.title === 'ชีต1');
   if (sheet1) {
-    await sheets.spreadsheets.batchUpdate({ spreadsheetId: ssId, requestBody: { requests: [{ deleteSheet: { sheetId: sheet1.properties.sheetId } }] } });
+    await withRetry(() => sheets.spreadsheets.batchUpdate({ spreadsheetId: ssId, requestBody: { requests: [{ deleteSheet: { sheetId: sheet1.properties.sheetId } }] } }));
     log('  [SK03] Deleted default "ชีต1" sheet');
   }
 }
@@ -919,7 +950,7 @@ async function createSK03(drive, sheets, supabasePersons, monthKey, supabase) {
   log(`  [SK03] id: ${ssId}`);
 
   // ── Fetch template sheet IDs ──────────────────────────────────────
-  const tmplSheets = (await sheets.spreadsheets.get({ spreadsheetId: CONFIG.sk03TemplateId, fields: 'sheets.properties' })).data.sheets;
+  const tmplSheets = (await withRetry(() => sheets.spreadsheets.get({ spreadsheetId: CONFIG.sk03TemplateId, fields: 'sheets.properties' }))).data.sheets;
   const findTmpl   = name => {
     const s = tmplSheets.find(sh => sh.properties.title === name);
     if (!s) throw new Error(`Template sheet "${name}" not found`);
@@ -929,31 +960,31 @@ async function createSK03(drive, sheets, supabasePersons, monthKey, supabase) {
   const depTmplId     = findTmpl('dep_template');
 
   // Get "ชีต1" sheetId of new spreadsheet (to delete after copying staff)
-  const ssSheets      = (await sheets.spreadsheets.get({ spreadsheetId: ssId, fields: 'sheets.properties' })).data.sheets;
+  const ssSheets      = (await withRetry(() => sheets.spreadsheets.get({ spreadsheetId: ssId, fields: 'sheets.properties' }))).data.sheets;
   const defaultSheetId = ssSheets[0]?.properties.sheetId;
 
   // ══════════════════════════════════════════════════════════════════
   //  1. Staff sheet
   // ══════════════════════════════════════════════════════════════════
   log(`  [SK03] Staff sheet (${staffArray.length} persons)…`);
-  const staffSheetId = (await sheets.spreadsheets.sheets.copyTo({
+  const staffSheetId = (await withRetry(() => sheets.spreadsheets.sheets.copyTo({
     spreadsheetId: CONFIG.sk03TemplateId, sheetId: overallTmplId,
     requestBody: { destinationSpreadsheetId: ssId },
-  })).data.sheetId;
+  }))).data.sheetId;
 
   // Rename + delete default sheet
-  await sheets.spreadsheets.batchUpdate({ spreadsheetId: ssId, requestBody: { requests: [
+  await withRetry(() => sheets.spreadsheets.batchUpdate({ spreadsheetId: ssId, requestBody: { requests: [
     { updateSheetProperties: { properties: { sheetId: staffSheetId, title: staffSheetName }, fields: 'title' } },
     ...(defaultSheetId != null ? [{ deleteSheet: { sheetId: defaultSheetId } }] : []),
-  ]}});
+  ]}}));
 
   // A3 header
-  await sheets.spreadsheets.values.update({ spreadsheetId: ssId, range: `'${staffSheetName}'!A3`, valueInputOption: 'RAW', requestBody: { values: [[`ประจำเดือน  ${THAI_MONTHS[month]}  พ.ศ.  ${beYear}`]] } });
+  await withRetry(() => sheets.spreadsheets.values.update({ spreadsheetId: ssId, range: `'${staffSheetName}'!A3`, valueInputOption: 'RAW', requestBody: { values: [[`ประจำเดือน  ${THAI_MONTHS[month]}  พ.ศ.  ${beYear}`]] } }));
 
   // Data rows
   const staffRows = buildOverallRows(staffArray, S, false);
   if (staffRows.length > 0) {
-    await sheets.spreadsheets.values.update({ spreadsheetId: ssId, range: `'${staffSheetName}'!A${S}:V${S + staffRows.length - 1}`, valueInputOption: 'USER_ENTERED', requestBody: { values: staffRows } });
+    await withRetry(() => sheets.spreadsheets.values.update({ spreadsheetId: ssId, range: `'${staffSheetName}'!A${S}:V${S + staffRows.length - 1}`, valueInputOption: 'USER_ENTERED', requestBody: { values: staffRows } }));
   }
   const staffLastRow = S + staffArray.length - 1;
 
@@ -968,20 +999,20 @@ async function createSK03(drive, sheets, supabasePersons, monthKey, supabase) {
   totalsRow[13] = `=SUM(N${S}:N${staffLastRow})`;  // col N (idx 13)
   totalsRow[14] = `=SUM(O${S}:O${staffLastRow})`;  // col O (idx 14)
 
-  const appendRes = await sheets.spreadsheets.values.append({
+  const appendRes = await withRetry(() => sheets.spreadsheets.values.append({
     spreadsheetId: ssId,
     range: `'${staffSheetName}'!A${staffLastRow + 1}`,
     valueInputOption: 'USER_ENTERED',
     insertDataOption: 'INSERT_ROWS',
     requestBody: { values: [totalsRow] },
-  });
+  }));
   // Find the actual row number appended (1-based)
   const staffTotalRowRange = appendRes.data.updates?.updatedRange ?? '';
   const staffTotalRowMatch = staffTotalRowRange.match(/:?[A-Z](\d+)$/);
   const staffTotalRow = staffTotalRowMatch ? parseInt(staffTotalRowMatch[1]) : staffLastRow + 1;
 
   // Paint M:O of the totals row red; clear M:O below it (template residual colours)
-  await sheets.spreadsheets.batchUpdate({
+  await withRetry(() => sheets.spreadsheets.batchUpdate({
     spreadsheetId: ssId,
     requestBody: { requests: [
       {
@@ -999,7 +1030,7 @@ async function createSK03(drive, sheets, supabasePersons, monthKey, supabase) {
         },
       },
     ]},
-  });
+  }));
 
   await writeOverallSignature(sheets, ssId, staffSheetName, staffSheetId, staffTotalRow);
 
@@ -1014,20 +1045,20 @@ async function createSK03(drive, sheets, supabasePersons, monthKey, supabase) {
   //  2. Intern sheet
   // ══════════════════════════════════════════════════════════════════
   log(`  [SK03] Intern sheet (${internArray.length} persons)…`);
-  const internSheetId = (await sheets.spreadsheets.sheets.copyTo({
+  const internSheetId = (await withRetry(() => sheets.spreadsheets.sheets.copyTo({
     spreadsheetId: CONFIG.sk03TemplateId, sheetId: overallTmplId,
     requestBody: { destinationSpreadsheetId: ssId },
-  })).data.sheetId;
+  }))).data.sheetId;
 
-  await sheets.spreadsheets.batchUpdate({ spreadsheetId: ssId, requestBody: { requests: [
+  await withRetry(() => sheets.spreadsheets.batchUpdate({ spreadsheetId: ssId, requestBody: { requests: [
     { updateSheetProperties: { properties: { sheetId: internSheetId, title: internSheetName }, fields: 'title' } },
-  ]}});
+  ]}}));
 
-  await sheets.spreadsheets.values.update({ spreadsheetId: ssId, range: `'${internSheetName}'!A3`, valueInputOption: 'RAW', requestBody: { values: [[`ประจำเดือน  ${THAI_MONTHS[month]}  พ.ศ.  ${beYear}`]] } });
+  await withRetry(() => sheets.spreadsheets.values.update({ spreadsheetId: ssId, range: `'${internSheetName}'!A3`, valueInputOption: 'RAW', requestBody: { values: [[`ประจำเดือน  ${THAI_MONTHS[month]}  พ.ศ.  ${beYear}`]] } }));
 
   const internRows = buildOverallRows(internArray, S, true);
   if (internRows.length > 0) {
-    await sheets.spreadsheets.values.update({ spreadsheetId: ssId, range: `'${internSheetName}'!A${S}:V${S + internRows.length - 1}`, valueInputOption: 'USER_ENTERED', requestBody: { values: internRows } });
+    await withRetry(() => sheets.spreadsheets.values.update({ spreadsheetId: ssId, range: `'${internSheetName}'!A${S}:V${S + internRows.length - 1}`, valueInputOption: 'USER_ENTERED', requestBody: { values: internRows } }));
   }
   const internLastRow = S + internArray.length - 1;
 
@@ -1039,18 +1070,18 @@ async function createSK03(drive, sheets, supabasePersons, monthKey, supabase) {
   internTotalsRow[13] = `=SUM(N${S}:N${internLastRow})`;  // col N (idx 13)
   internTotalsRow[14] = `=SUM(O${S}:O${internLastRow})`;  // col O (idx 14)
 
-  const internAppendRes = await sheets.spreadsheets.values.append({
+  const internAppendRes = await withRetry(() => sheets.spreadsheets.values.append({
     spreadsheetId: ssId,
     range: `'${internSheetName}'!A${internLastRow + 1}`,
     valueInputOption: 'USER_ENTERED',
     insertDataOption: 'INSERT_ROWS',
     requestBody: { values: [internTotalsRow] },
-  });
+  }));
   const internTotalRowRange = internAppendRes.data.updates?.updatedRange ?? '';
   const internTotalRowMatch = internTotalRowRange.match(/:?[A-Z](\d+)$/);
   const internTotalRow = internTotalRowMatch ? parseInt(internTotalRowMatch[1]) : internLastRow + 1;
 
-  await sheets.spreadsheets.batchUpdate({
+  await withRetry(() => sheets.spreadsheets.batchUpdate({
     spreadsheetId: ssId,
     requestBody: { requests: [
       {
@@ -1068,7 +1099,7 @@ async function createSK03(drive, sheets, supabasePersons, monthKey, supabase) {
         },
       },
     ]},
-  });
+  }));
 
   await writeOverallSignature(sheets, ssId, internSheetName, internSheetId, internTotalRow);
 
