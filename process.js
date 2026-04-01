@@ -541,7 +541,7 @@ function buildOverallRows(persons, S, isIntern) {
       p.lastname  || '',                                     // D
       p.position  || 'นายแพทย์',                            // E
       p.rank      || '',                                     // F: rank (supabase 'rank')
-      p.emp_type  || '',                                     // G: type
+      p.type      || '',                                     // G: type (supabase 'type')
       p.std_score  ?? 2200,                                  // H
       (getMgmt(p)?.amount ?? p.boss_score ?? 0),             // I: mgmt amount or boss score
       p.score ?? p.perf_score ?? 0,                          // J: score (SB 'score' overrides 'performance_score')
@@ -803,7 +803,7 @@ async function buildDeptSheets(sheets, ssId, depTmplSheetId, allPersons, beYear,
         idx + 1,
         `${p.prefix} ${p.firstname}  ${p.lastname}`,  // double space before lastname
         `${p.position}${p.rank}`,                      // position + rank (supabase 'rank')
-        p.emp_type || '',
+        p.type || '',                                   // D: type (supabase 'type')
         mgmt?.amount ?? 0,   // E: management amount (or 0)
         0, 0, ' ',
         mgmt?.remark ?? ' ', // I: remark
@@ -939,19 +939,26 @@ async function createSK03(drive, sheets, supabasePersons, monthKey, supabase) {
     else staffArray.push(...sorted);
   }
 
-  // ── Delete old spreadsheet + create new (mirrors staff GAS) ──────
+  // ── Reuse existing spreadsheet (overwrite) or create new ─────────
   const existing = await driveListAll(drive, {
     q: `'${CONFIG.sk03FolderId}' in parents and name='sk03 - ${monthKey}' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false`,
     fields: 'nextPageToken, files(id)', pageSize: 10,
   });
-  for (const f of existing) { await withRetry(() => drive.files.delete({ fileId: f.id })); log(`  [SK03] Deleted old: ${f.id}`); }
 
-  log(`  [SK03] Creating "sk03 - ${monthKey}"…`);
-  const ssId = (await withRetry(() => drive.files.create({
-    requestBody: { name: `sk03 - ${monthKey}`, mimeType: 'application/vnd.google-apps.spreadsheet', parents: [CONFIG.sk03FolderId] },
-    fields: 'id',
-  }))).data.id;
-  log(`  [SK03] id: ${ssId}`);
+  let ssId;
+  if (existing.length > 0) {
+    const [first, ...dupes] = existing;
+    ssId = first.id;
+    for (const d of dupes) { await withRetry(() => drive.files.delete({ fileId: d.id })); log(`  [SK03] Deleted duplicate: ${d.id}`, 'warn'); }
+    log(`  [SK03] Overwriting existing "sk03 - ${monthKey}" (id: ${ssId})`);
+  } else {
+    log(`  [SK03] Creating "sk03 - ${monthKey}"…`);
+    ssId = (await withRetry(() => drive.files.create({
+      requestBody: { name: `sk03 - ${monthKey}`, mimeType: 'application/vnd.google-apps.spreadsheet', parents: [CONFIG.sk03FolderId] },
+      fields: 'id',
+    }))).data.id;
+    log(`  [SK03] id: ${ssId}`);
+  }
 
   // ── Fetch template sheet IDs ──────────────────────────────────────
   const tmplSheets = (await withRetry(() => sheets.spreadsheets.get({ spreadsheetId: CONFIG.sk03TemplateId, fields: 'sheets.properties' }))).data.sheets;
@@ -963,9 +970,9 @@ async function createSK03(drive, sheets, supabasePersons, monthKey, supabase) {
   const overallTmplId = findTmpl('overall_template');
   const depTmplId     = findTmpl('dep_template');
 
-  // Get "ชีต1" sheetId of new spreadsheet (to delete after copying staff)
-  const ssSheets      = (await withRetry(() => sheets.spreadsheets.get({ spreadsheetId: ssId, fields: 'sheets.properties' }))).data.sheets;
-  const defaultSheetId = ssSheets[0]?.properties.sheetId;
+  // Get all existing sheets (to delete after copying the first new sheet)
+  const ssSheets   = (await withRetry(() => sheets.spreadsheets.get({ spreadsheetId: ssId, fields: 'sheets.properties' }))).data.sheets;
+  const oldSheetIds = ssSheets.map(sh => sh.properties.sheetId);
 
   // ══════════════════════════════════════════════════════════════════
   //  1. Staff sheet
@@ -976,10 +983,10 @@ async function createSK03(drive, sheets, supabasePersons, monthKey, supabase) {
     requestBody: { destinationSpreadsheetId: ssId },
   }))).data.sheetId;
 
-  // Rename + delete default sheet
+  // Rename staff sheet + delete all pre-existing sheets
   await withRetry(() => sheets.spreadsheets.batchUpdate({ spreadsheetId: ssId, requestBody: { requests: [
     { updateSheetProperties: { properties: { sheetId: staffSheetId, title: staffSheetName }, fields: 'title' } },
-    ...(defaultSheetId != null ? [{ deleteSheet: { sheetId: defaultSheetId } }] : []),
+    ...oldSheetIds.map(id => ({ deleteSheet: { sheetId: id } })),
   ]}}));
 
   // A3 header
