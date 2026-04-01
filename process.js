@@ -984,10 +984,15 @@ async function createSK03(drive, sheets, supabasePersons, monthKey, supabase) {
     requestBody: { destinationSpreadsheetId: ssId },
   }))).data.sheetId;
 
-  // Rename staff sheet + delete all pre-existing sheets
+  // Delete all pre-existing sheets first (avoids name conflict on rename),
+  // then rename the newly copied sheet to the target name.
+  if (oldSheetIds.length > 0) {
+    await withRetry(() => sheets.spreadsheets.batchUpdate({ spreadsheetId: ssId, requestBody: { requests:
+      oldSheetIds.map(id => ({ deleteSheet: { sheetId: id } })),
+    }}));
+  }
   await withRetry(() => sheets.spreadsheets.batchUpdate({ spreadsheetId: ssId, requestBody: { requests: [
     { updateSheetProperties: { properties: { sheetId: staffSheetId, title: staffSheetName }, fields: 'title' } },
-    ...oldSheetIds.map(id => ({ deleteSheet: { sheetId: id } })),
   ]}}));
 
   // A3 header
