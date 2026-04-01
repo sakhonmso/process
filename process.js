@@ -370,9 +370,13 @@ function listsMatch(driveNames, supabasePersons) {
 //  STEP 5 — Merge Excel files
 // ═══════════════════════════════════════════════════════════════════
 function isSheetEmpty(ws) {
-  let count = 0;
-  ws.eachRow(row => { row.eachCell(cell => { if (cell.value !== null && cell.value !== undefined && cell.value !== '') count++; }); });
-  return count <= 3;
+  let dataRows = 0;
+  ws.eachRow(row => {
+    let hasValue = false;
+    row.eachCell(cell => { if (cell.value !== null && cell.value !== undefined && cell.value !== '') hasValue = true; });
+    if (hasValue) dataRows++;
+  });
+  return dataRows <= 1; // 0 or 1 rows with data = only a header (or blank)
 }
 
 async function stripFormulas(buffer) {
@@ -802,7 +806,7 @@ async function buildDeptSheets(sheets, ssId, depTmplSheetId, allPersons, beYear,
       return [
         idx + 1,
         `${p.prefix} ${p.firstname}  ${p.lastname}`,  // double space before lastname
-        `${p.position}${p.rank}`,                      // position + rank (supabase 'rank')
+        `${p.position}${p.rank ? ' ' + p.rank : ''}`,    // position + rank (supabase 'rank')
         p.type || '',                                   // D: type (supabase 'type')
         mgmt?.amount ?? 0,   // E: management amount (or 0)
         0, 0, ' ',
@@ -835,11 +839,8 @@ async function buildDeptSheets(sheets, ssId, depTmplSheetId, allPersons, beYear,
         formulaData.push({ range: `'${dept}'!F${r}`, values: [[`='${internSheetName}'!N${rowNum}`]] });
         formulaData.push({ range: `'${dept}'!G${r}`, values: [[`=E${r}+F${r}`]] });
       } else {
-        // E: use mgmt amount (already written as value) or fall back to staff!M formula
-        const mgmt = getMgmt(p);
-        if (!mgmt) {
-          formulaData.push({ range: `'${dept}'!E${r}`, values: [[`='${staffSheetName}'!M${rowNum}`]] });
-        }
+        // E: always reference staff!M so dept sheet stays in sync with Supabase mgmt_fee
+        formulaData.push({ range: `'${dept}'!E${r}`, values: [[`='${staffSheetName}'!M${rowNum}`]] });
         formulaData.push({ range: `'${dept}'!F${r}`, values: [[`='${staffSheetName}'!N${rowNum}`]] });
         formulaData.push({ range: `'${dept}'!G${r}`, values: [[`=E${r}+F${r}`]] });
       }
@@ -1049,7 +1050,8 @@ async function createSK03(drive, sheets, supabasePersons, monthKey, supabase) {
   log(`  [SK03] Patching row_num for ${staffArray.length} staff…`);
   for (let i = 0; i < staffArray.length; i++) {
     if (staffArray[i].index == null) continue;
-    await supabase.from(monthKey).update({ row_num: S + i }).eq(SB.index, staffArray[i].index);
+    const { error } = await supabase.from(monthKey).update({ row_num: S + i }).eq(SB.index, staffArray[i].index);
+    if (error) log(`  [SK03] ⚠ row_num patch failed for index ${staffArray[i].index}: ${error.message}`, 'warn');
   }
 
   // ══════════════════════════════════════════════════════════════════
@@ -1118,7 +1120,8 @@ async function createSK03(drive, sheets, supabasePersons, monthKey, supabase) {
   log(`  [SK03] Patching row_num for ${internArray.length} interns…`);
   for (let i = 0; i < internArray.length; i++) {
     if (internArray[i].index == null) continue;
-    await supabase.from(monthKey).update({ row_num: S + i }).eq(SB.index, internArray[i].index);
+    const { error } = await supabase.from(monthKey).update({ row_num: S + i }).eq(SB.index, internArray[i].index);
+    if (error) log(`  [SK03] ⚠ row_num patch failed for index ${internArray[i].index}: ${error.message}`, 'warn');
   }
 
   // ══════════════════════════════════════════════════════════════════
@@ -1126,8 +1129,13 @@ async function createSK03(drive, sheets, supabasePersons, monthKey, supabase) {
   // ══════════════════════════════════════════════════════════════════
   // Build row_num lookup: "prefix firstname  lastname" → row in staff/intern sheet
   const rowNumMap = {};
-  staffArray.forEach( (p, i) => { rowNumMap[`${p.prefix} ${p.firstname}  ${p.lastname}`] = S + i; });
-  internArray.forEach((p, i) => { rowNumMap[`${p.prefix} ${p.firstname}  ${p.lastname}`] = S + i; });
+  const addToRowNumMap = (p, row) => {
+    const key = `${p.prefix} ${p.firstname}  ${p.lastname}`;
+    if (key in rowNumMap) log(`  [SK03] ⚠ rowNumMap duplicate key: "${key}" — overwriting row ${rowNumMap[key]} with ${row}`, 'warn');
+    rowNumMap[key] = row;
+  };
+  staffArray.forEach( (p, i) => addToRowNumMap(p, S + i));
+  internArray.forEach((p, i) => addToRowNumMap(p, S + i));
 
   await buildDeptSheets(sheets, ssId, depTmplId, supabasePersons, beYear, month, staffSheetName, internSheetName, rowNumMap);
 
@@ -1161,6 +1169,18 @@ async function main() {
   const sheets   = createSheetsClient();
   const supabase = createClient(CONFIG.supabase.url, CONFIG.supabase.key);
   const months   = getTargetMonths();
+
+  // Pre-flight: verify SK03 template has required sheets before processing any month
+  log('[Pre-flight] Verifying SK03 template sheets…');
+  const tmplCheck = await withRetry(() => sheets.spreadsheets.get({ spreadsheetId: CONFIG.sk03TemplateId, fields: 'sheets.properties' }));
+  const tmplTitles = tmplCheck.data.sheets.map(s => s.properties.title);
+  for (const required of ['overall_template', 'dep_template']) {
+    if (!tmplTitles.includes(required)) {
+      console.error(`\n❌  SK03 template is missing sheet: "${required}"`);
+      process.exit(1);
+    }
+  }
+  log('[Pre-flight] ✓ Template OK');
 
   console.log('══════════════════════════════════════════════════════');
   console.log(' P4P Excel Merge + SK03 Pipeline');
