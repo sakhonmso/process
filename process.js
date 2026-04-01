@@ -115,7 +115,7 @@ const SB = {
   position:  'position',
   level:     'level',
   rank:      'rank',            // col F in staff sheet and col C suffix in dept sheets
-  emp_type:  'employee_type',   // type in GAS
+  type:      'type',             // col G in staff/intern sheet, col D in dept sheets
   std:       'standard_score',
   boss:      'boss_score',
   perf:      'performance_score', // fallback col J
@@ -336,7 +336,7 @@ async function getSupabaseMonthData(supabase, tableKey) {
     position:   sbVal(r, SB.position, 'นายแพทย์'),
     level:      sbVal(r, SB.level,    ''),
     rank:       sbVal(r, SB.rank,     ''),
-    emp_type:   sbVal(r, SB.emp_type, 'ข้าราชการ'),
+    type:       sbVal(r, SB.type,     ''),
     std_score:  sbVal(r, SB.std,      2200),
     boss_score: sbVal(r, SB.boss,     0),
     perf_score: sbVal(r, SB.perf,     0),
