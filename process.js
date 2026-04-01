@@ -233,7 +233,7 @@ async function driveListAll(drive, params) {
   const items = [];
   let pageToken;
   do {
-    const res = await drive.files.list({ ...params, pageToken });
+    const res = await withRetry(() => drive.files.list({ ...params, pageToken }));
     items.push(...(res.data.files ?? []));
     pageToken = res.data.nextPageToken;
   } while (pageToken);
@@ -259,7 +259,7 @@ async function listExcelFiles(drive, folderId) {
 }
 
 async function downloadFile(drive, fileId) {
-  const res = await drive.files.get({ fileId, alt: 'media' }, { responseType: 'arraybuffer' });
+  const res = await withRetry(() => drive.files.get({ fileId, alt: 'media' }, { responseType: 'arraybuffer' }));
   return Buffer.from(res.data);
 }
 
@@ -273,23 +273,23 @@ async function uploadFileToDrive(drive, folderId, fileName, buffer) {
   if (existing.length > 0) {
     const [first, ...dupes] = existing;
     for (const d of dupes) {
-      await drive.files.delete({ fileId: d.id });
+      await withRetry(() => drive.files.delete({ fileId: d.id }));
       log(`  [Drive] Deleted duplicate id: ${d.id}`, 'warn');
     }
     log(`  [Drive] Overwriting "${fileName}" (id: ${first.id})`);
-    const res = await drive.files.update({
+    const res = await withRetry(() => drive.files.update({
       fileId: first.id,
       requestBody: { name: fileName },
       media: { mimeType: mime, body: Readable.from([buffer]) },
       fields: 'id, name, webViewLink',
-    });
+    }));
     return res.data;
   }
-  const res = await drive.files.create({
+  const res = await withRetry(() => drive.files.create({
     requestBody: { name: fileName, parents: [folderId], mimeType: mime },
     media: { mimeType: mime, body: Readable.from([buffer]) },
     fields: 'id, name, webViewLink',
-  });
+  }));
   return res.data;
 }
 
@@ -600,7 +600,7 @@ async function writeOverallMeta(sheets, ssId, sheetName, lastRow, isIntern, inte
           ['P4P staff & intern (รวมค่าบริหาร)',     '=Y19+Y18'],
         ]},
         { range: `'${sheetName}'!X22:Y22`, values: [['คงคืน', '']] },
-        { range: `'${sheetName}'!X23:Y23`, values: [['=Y9-Y19', '']] },
+        { range: `'${sheetName}'!Y23`,     values: [['=Y9-Y19']] },
       ];
 
   await withRetry(() => sheets.spreadsheets.values.batchUpdate({
@@ -940,13 +940,13 @@ async function createSK03(drive, sheets, supabasePersons, monthKey, supabase) {
     q: `'${CONFIG.sk03FolderId}' in parents and name='sk03 - ${monthKey}' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false`,
     fields: 'nextPageToken, files(id)', pageSize: 10,
   });
-  for (const f of existing) { await drive.files.delete({ fileId: f.id }); log(`  [SK03] Deleted old: ${f.id}`); }
+  for (const f of existing) { await withRetry(() => drive.files.delete({ fileId: f.id })); log(`  [SK03] Deleted old: ${f.id}`); }
 
   log(`  [SK03] Creating "sk03 - ${monthKey}"…`);
-  const ssId = (await drive.files.create({
+  const ssId = (await withRetry(() => drive.files.create({
     requestBody: { name: `sk03 - ${monthKey}`, mimeType: 'application/vnd.google-apps.spreadsheet', parents: [CONFIG.sk03FolderId] },
     fields: 'id',
-  })).data.id;
+  }))).data.id;
   log(`  [SK03] id: ${ssId}`);
 
   // ── Fetch template sheet IDs ──────────────────────────────────────
