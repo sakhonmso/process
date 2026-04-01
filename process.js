@@ -649,6 +649,10 @@ async function formatOverallSheet(sheets, ssId, sheetId, persons, lastRow, isInt
     });
   });
 
+  // Extend the grid so the clear range below never exceeds the sheet boundary.
+  // This is needed when persons fill the sheet to the template's row limit.
+  fmtReqs.push({ appendDimension: { sheetId, dimension: 'ROWS', length: 20 } });
+
   // Clear J background for rows after last person (template may have residual colours)
   fmtReqs.push({
     repeatCell: {
