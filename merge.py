@@ -85,8 +85,13 @@ def copy_sheet(src_ws, dst_wb, sheet_name, tab_color=None):
         dst_ws.merge_cells(str(merge_range))
 
     # ── Cells: values + styles ───────────────────────────────────────
+    # MergedCell objects (non-top-left cells of a merge range) are read-only;
+    # skip them — their range is already registered via merge_cells() above.
+    from openpyxl.cell.cell import MergedCell
     for row in src_ws.iter_rows():
         for cell in row:
+            if isinstance(cell, MergedCell):
+                continue
             dst_cell = dst_ws.cell(row=cell.row, column=cell.column)
             dst_cell.value = cell.value
             if cell.has_style:
