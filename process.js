@@ -405,7 +405,9 @@ async function loadWorkbook(buffer) {
  * Tab colour is NOT copied (caller sets it separately via dstWS.properties).
  */
 function copyWorksheet(srcWS, dstWS) {
-  dstWS.model = Object.assign({}, srcWS.model, { id: dstWS.id, name: dstWS.name });
+  // media[] holds imageId references into the source workbook; the merged workbook
+  // has no media, so those IDs would be undefined during writeBuffer() → clear them.
+  dstWS.model = Object.assign({}, srcWS.model, { id: dstWS.id, name: dstWS.name, media: [] });
 }
 
 function sortByDeptThenName(a, b, deptMap) {
