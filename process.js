@@ -917,25 +917,22 @@ async function createSK03(drive, sheets, supabasePersons, monthKey, supabase) {
     else staffArray.push(...sorted);
   }
 
-  // ── Reuse existing spreadsheet (overwrite) or create new ─────────
+  // ── Find old copies, create new spreadsheet, then delete old ones ──
   const existing = await driveListAll(drive, {
     q: `'${CONFIG.sk03FolderId}' in parents and name='sk03 - ${monthKey}' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false`,
     fields: 'nextPageToken, files(id)', pageSize: 10,
   });
 
-  let ssId;
-  if (existing.length > 0) {
-    const [first, ...dupes] = existing;
-    ssId = first.id;
-    for (const d of dupes) { await withRetry(() => drive.files.delete({ fileId: d.id })); log(`  [SK03] Deleted duplicate: ${d.id}`, 'warn'); }
-    log(`  [SK03] Overwriting existing "sk03 - ${monthKey}" (id: ${ssId})`);
-  } else {
-    log(`  [SK03] Creating "sk03 - ${monthKey}"…`);
-    ssId = (await withRetry(() => drive.files.create({
-      requestBody: { name: `sk03 - ${monthKey}`, mimeType: 'application/vnd.google-apps.spreadsheet', parents: [CONFIG.sk03FolderId] },
-      fields: 'id',
-    }))).data.id;
-    log(`  [SK03] id: ${ssId}`);
+  log(`  [SK03] Creating "sk03 - ${monthKey}"…`);
+  const ssId = (await withRetry(() => drive.files.create({
+    requestBody: { name: `sk03 - ${monthKey}`, mimeType: 'application/vnd.google-apps.spreadsheet', parents: [CONFIG.sk03FolderId] },
+    fields: 'id',
+  }))).data.id;
+  log(`  [SK03] id: ${ssId}`);
+
+  for (const old of existing) {
+    await withRetry(() => drive.files.delete({ fileId: old.id }));
+    log(`  [SK03] Deleted old file: ${old.id}`);
   }
 
   // ── Fetch template sheet IDs ──────────────────────────────────────
