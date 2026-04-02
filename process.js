@@ -72,7 +72,7 @@ const DEPT_COLORS = {
   'INTERN':                               '#ECC1D1',
 };
 // ─── Management allowance data ───────────────────────────────────
-// Key: firstname + " " + lastname (no prefix). Provides col I (staff) and col E + I (dept).
+// Key: firstname + " " + lastname (no prefix). Provides col M (staff) and col E + I (dept).
 const MANAGEMENT_DATA = [
   { name: 'ศิริพันธ์ บุญโต',             remark: 'รองผู้อำนวยการ',      amount: 7000 },
   { name: 'นิธินันท์ สร้อยอากาศ',         remark: 'หัวหน้ากลุ่มงาน',     amount: 1000 },
@@ -135,7 +135,6 @@ const SB = {
   boss:      'boss_score',
   perf:      'performance_score', // fallback col J
   score:     'score',               // col J override — used when not null
-  mgmt:      'management_fee',
   index:     'index',           // for updateSupabaseRowNum
 };
 
@@ -356,7 +355,6 @@ async function getSupabaseMonthData(supabase, tableKey) {
     boss_score: sbVal(r, SB.boss,     0),
     perf_score: sbVal(r, SB.perf,     0),
     score:      sbVal(r, SB.score,    null), // overrides perf_score in col J when not null
-    mgmt_fee:   sbVal(r, SB.mgmt,     0),
     index:      sbVal(r, SB.index,    null),
   }));
 }
@@ -369,8 +367,10 @@ function listsMatch(driveNames, supabasePersons) {
   const normSB    = supabasePersons.map(p => normaliseName(p.fullname));
   if (normDrive.length !== normSB.length) {
     log(`  [Compare] Length mismatch — Drive: ${normDrive.length}, Supabase: ${normSB.length}`, 'warn');
-    normDrive.forEach(n => { if (!normSB.includes(n))   log(`    ✗ Drive but not SB: "${n}"`, 'warn'); });
-    normSB.forEach(n   => { if (!normDrive.includes(n)) log(`    ✗ SB but not Drive: "${n}"`, 'warn'); });
+    const setSB    = new Set(normSB);
+    const setDrive = new Set(normDrive);
+    normDrive.forEach(n => { if (!setSB.has(n))    log(`    ✗ Drive but not SB: "${n}"`, 'warn'); });
+    normSB.forEach(n   => { if (!setDrive.has(n)) log(`    ✗ SB but not Drive: "${n}"`, 'warn'); });
     return false;
   }
   const s1 = [...normDrive].sort(), s2 = [...normSB].sort();
@@ -495,7 +495,8 @@ async function mergeAndUpload(drive, driveFiles, supabasePersons, monthKey) {
     if (usedSheetNames.has(sheetName)) {
       let c = 2;
       while (usedSheetNames.has(`${sheetName}_${c}`)) c++;
-      sheetName = `${sheetName}_${c}`.substring(0, 31);
+      const suffix = `_${c}`;
+      sheetName = `${sheetName.substring(0, 31 - suffix.length)}${suffix}`;
     }
     usedSheetNames.add(sheetName);
 
@@ -585,8 +586,7 @@ function buildOverallRows(persons, S, isIntern) {
  * Staff and intern have different side panel structure — mirrors both GAS scripts.
  */
 async function writeOverallMeta(sheets, ssId, sheetName, lastRow, isIntern, internSheetName) {
-  const S      = 8;
-  const intern = `'${internSheetName}'`;
+  const S = 8;
 
   const panelData = isIntern
     ? [  // ── Intern side panel (rows 8, 11, 15) ────────────────
@@ -604,7 +604,7 @@ async function writeOverallMeta(sheets, ssId, sheetName, lastRow, isIntern, inte
         { range: `'${sheetName}'!X8:Y8`,   values: [['งบจัดสรร', '']] },
         { range: `'${sheetName}'!X9:Y10`,  values: [
           ['งบทั้งหมด',   0],
-          ['เฉพาะ staff', `=Y9-${intern}!Y16`],
+          ['เฉพาะ staff', `=Y9-'${internSheetName}'!Y16`],
         ]},
         { range: `'${sheetName}'!X12:Y12`, values: [['ค่าที่คำนวณได้', '']] },
         { range: `'${sheetName}'!X13:Y14`, values: [
@@ -615,7 +615,7 @@ async function writeOverallMeta(sheets, ssId, sheetName, lastRow, isIntern, inte
         { range: `'${sheetName}'!X17:Y20`, values: [
           ['ค่าตอบแทนตามสัดส่วนวิชาชีพ',     `=SUM(N${S}:N${lastRow})`],
           ['ค่าตอบแทนบริหาร',                 `=SUM(M${S}:M${lastRow})`],
-          ['P4P staff & intern (ไม่รวมค่าบริหาร)', `=Y17+${intern}!Y16`],
+          ['P4P staff & intern (ไม่รวมค่าบริหาร)', `=Y17+'${internSheetName}'!Y16`],
           ['P4P staff & intern (รวมค่าบริหาร)',     '=Y19+Y18'],
         ]},
         { range: `'${sheetName}'!X22:Y22`, values: [['คงคืน', '']] },
@@ -814,8 +814,9 @@ async function buildDeptSheets(sheets, ssId, depTmplSheetId, allPersons, beYear,
       },
     }));
 
-    // Data rows: [count, "prefix firstname  lastname", "position+rank", type, 0, 0, 0, " ", " "]
+    // Data rows: [count, "prefix firstname  lastname", "position+rank", type, mgmt_amount, 0, 0, " ", remark]
     // Note: double space before lastname — this is the key for rowNumMap lookup
+    // F and G are later overwritten by formulas; E stays as the direct MANAGEMENT_DATA amount.
     const rows = persons.map((p, idx) => {
       const mgmt = getMgmt(p);
       return [
