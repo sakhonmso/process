@@ -70,7 +70,7 @@ def copy_sheet(src_ws, dst_wb, sheet_name, tab_color=None):
         dst_col = dst_ws.column_dimensions[col_letter]
         dst_col.width    = col_dim.width
         dst_col.hidden   = col_dim.hidden
-        dst_col.best_fit = col_dim.best_fit
+        dst_col.bestFit  = col_dim.bestFit
         dst_col.outline_level = col_dim.outline_level
 
     # ── Row dimensions ───────────────────────────────────────────────
