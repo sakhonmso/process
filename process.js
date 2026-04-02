@@ -11,10 +11,13 @@
 
 require('dotenv').config();
 
-const { google }       = require('googleapis');
-const { createClient } = require('@supabase/supabase-js');
-const ExcelJS          = require('exceljs');
-const { Readable }     = require('stream');
+const { google }        = require('googleapis');
+const { createClient }  = require('@supabase/supabase-js');
+const { Readable }      = require('stream');
+const fs                = require('fs');
+const os                = require('os');
+const path              = require('path');
+const { spawnSync }     = require('child_process');
 
 // ═══════════════════════════════════════════════════════════════════
 //  CONFIG
@@ -381,34 +384,8 @@ function listsMatch(driveNames, supabasePersons) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-//  STEP 5 — Merge Excel files
+//  STEP 5 — Merge Excel files (via Python/openpyxl)
 // ═══════════════════════════════════════════════════════════════════
-function isSheetEmpty(ws) {
-  let dataRows = 0;
-  ws.eachRow(row => {
-    let hasValue = false;
-    row.eachCell(cell => { if (cell.value !== null && cell.value !== undefined && cell.value !== '') hasValue = true; });
-    if (hasValue) dataRows++;
-  });
-  return dataRows <= 1; // 0 or 1 rows with data = only a header (or blank)
-}
-
-async function loadWorkbook(buffer) {
-  const wb = new ExcelJS.Workbook();
-  await wb.xlsx.load(buffer);
-  return wb;
-}
-
-/**
- * Copy srcWS into dstWS via ExcelJS's internal model — preserves all rows,
- * columns, merges, styles, views, page setup, freeze panes, formulas, etc.
- * Tab colour is NOT copied (caller sets it separately via dstWS.properties).
- */
-function copyWorksheet(srcWS, dstWS) {
-  // media[] holds imageId references into the source workbook; the merged workbook
-  // has no media, so those IDs would be undefined during writeBuffer() → clear them.
-  dstWS.model = Object.assign({}, srcWS.model, { id: dstWS.id, name: dstWS.name, media: [] });
-}
 
 function sortByDeptThenName(a, b, deptMap) {
   const dA   = deptMap[a.normName] ?? '';
@@ -419,7 +396,7 @@ function sortByDeptThenName(a, b, deptMap) {
   return a.normName.localeCompare(b.normName, 'th');
 }
 
-/** Merge all Excel files → one workbook with one sheet per person */
+/** Merge all Excel files → one workbook with one sheet per person (via Python/openpyxl) */
 async function mergeAndUpload(drive, driveFiles, supabasePersons, monthKey) {
   const deptMap = {};
   supabasePersons.forEach(p => { deptMap[normaliseName(p.fullname)] = p.department; });
@@ -433,50 +410,70 @@ async function mergeAndUpload(drive, driveFiles, supabasePersons, monthKey) {
   filesWithName.forEach((f, i) =>
     log(`    ${String(i+1).padStart(2)}. ${f.origName.padEnd(32)} [${deptMap[f.normName] ?? '?'}]`));
 
-  const mergedWB       = new ExcelJS.Workbook();
-  const usedSheetNames = new Set();
-  let   totalRows = 0, sheetCount = 0;
+  // Create temp directory for this run
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'p4p_merge_'));
+  log(`\n  [Merge] Temp dir: ${tmpDir}`);
 
-  for (const file of filesWithName) {
-    log(`\n  [Merge] ↓ ${file.origName}`);
-    const buffer = await downloadFile(drive, file.id);
-    const wb     = await loadWorkbook(buffer);
+  try {
+    const manifestEntries = [];
+    const usedSheetNames  = new Set();
 
-    let targetWS = null;
-    for (const ws of wb.worksheets) {
-      if (!isSheetEmpty(ws)) { targetWS = ws; log(`      → using sheet: "${ws.name}"`); break; }
-      log(`      → sheet "${ws.name}" is empty, trying next`);
+    // Download each file into the temp directory
+    for (const file of filesWithName) {
+      log(`\n  [Merge] ↓ ${file.origName}`);
+      const buffer   = await downloadFile(drive, file.id);
+      const filePath = path.join(tmpDir, `${file.id}.xlsx`);
+      fs.writeFileSync(filePath, buffer);
+
+      let sheetName = toSheetName(file.origName);
+      if (usedSheetNames.has(sheetName)) {
+        let c = 2;
+        while (usedSheetNames.has(`${sheetName}_${c}`)) c++;
+        const suffix = `_${c}`;
+        sheetName = `${sheetName.substring(0, 31 - suffix.length)}${suffix}`;
+      }
+      usedSheetNames.add(sheetName);
+
+      const dept    = deptMap[file.normName] ?? '';
+      const tabArgb = hexToArgb(DEPT_COLORS[dept]) ?? '';
+      manifestEntries.push({ path: filePath, sheet_name: sheetName, tab_color: tabArgb });
     }
-    if (!targetWS) { log(`  ⚠ All sheets empty — skipped`, 'warn'); continue; }
 
-    let sheetName = toSheetName(file.origName);
-    if (usedSheetNames.has(sheetName)) {
-      let c = 2;
-      while (usedSheetNames.has(`${sheetName}_${c}`)) c++;
-      const suffix = `_${c}`;
-      sheetName = `${sheetName.substring(0, 31 - suffix.length)}${suffix}`;
+    if (manifestEntries.length === 0) {
+      log('  [Merge] ⚠ No files — nothing to upload', 'warn');
+      return null;
     }
-    usedSheetNames.add(sheetName);
 
-    const dept    = deptMap[file.normName] ?? '';
-    const tabArgb = hexToArgb(DEPT_COLORS[dept]);
-    const outWS   = mergedWB.addWorksheet(sheetName);
-    sheetCount++;
-    copyWorksheet(targetWS, outWS);
-    // Set tab colour after model copy (model copy resets properties to source values)
-    if (tabArgb) outWS.properties.tabColor = { argb: tabArgb };
-    totalRows += Math.max(0, outWS.rowCount - 1);
-    log(`      → ${outWS.rowCount} rows copied to "${sheetName}" [${dept || '?'}]${tabArgb ? ' 🎨' : ''}`);
+    // Write manifest for Python script
+    const manifestPath = path.join(tmpDir, 'manifest.json');
+    const outputPath   = path.join(tmpDir, 'merged.xlsx');
+    fs.writeFileSync(manifestPath, JSON.stringify({ files: manifestEntries }, null, 2), 'utf8');
+
+    // Invoke Python merge script
+    const scriptPath = path.join(__dirname, 'merge.py');
+    log('\n  [Merge] Running Python/openpyxl merge…');
+    const py = spawnSync(
+      process.platform === 'win32' ? 'python' : 'python3',
+      [scriptPath, manifestPath, outputPath],
+      { encoding: 'utf8', stdio: 'pipe' }
+    );
+    if (py.stdout) log(py.stdout.trimEnd());
+    if (py.stderr) log(py.stderr.trimEnd(), 'warn');
+    if (py.status !== 0) throw new Error(`merge.py exited with code ${py.status}`);
+
+    // Upload merged file to Drive
+    const buf      = fs.readFileSync(outputPath);
+    const name     = `merged_${monthKey}.xlsx`;
+    const sheetCnt = manifestEntries.length;
+    log(`\n  [Merge] Uploading "${name}" — ${sheetCnt} sheets…`);
+    const uploaded = await uploadFileToDrive(drive, CONFIG.outputFolderId, name, buf);
+    log(`  [Merge] ✓ id: ${uploaded.id}\n           🔗 ${uploaded.webViewLink}`);
+    return uploaded;
+
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    log('  [Merge] Temp dir cleaned up');
   }
-
-  if (sheetCount === 0) { log('  [Merge] ⚠ No data — nothing to upload', 'warn'); return null; }
-
-  const buf  = await mergedWB.xlsx.writeBuffer();
-  const name = `merged_${monthKey}.xlsx`;
-  log(`\n  [Merge] Uploading "${name}" — ${sheetCount} sheets, ${totalRows} data rows…`);
-  const uploaded = await uploadFileToDrive(drive, CONFIG.outputFolderId, name, buf);
-  log(`  [Merge] ✓ id: ${uploaded.id}\n           🔗 ${uploaded.webViewLink}`);
-  return uploaded;
 }
 
 // ═══════════════════════════════════════════════════════════════════
