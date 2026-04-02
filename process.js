@@ -100,6 +100,21 @@ const MGMT_LOOKUP = Object.fromEntries(
   MANAGEMENT_DATA.map(d => [normaliseName(d.name), { remark: d.remark, amount: d.amount }])
 );
 
+// Dept-head physicians eligible for extra score of 1,320 in col I
+const DEPT_HEAD_SET = new Set([
+  'ฉัตรดาว สุจริต',
+  'ศิริพันธ์ บุญโต',
+  'อรวรรณ อุตราวิสิทธิกุล',
+  'นฤวัต เกสรสุคนธ์',
+  'ดวงพร เกื้อกูลเกียรติ',
+  'พิสิษฐ์ เลิศเชาวพัฒน์',
+  'นิธินันท์ สร้อยอากาศ',
+  'ธญาภร ลิขิตธรรมากุล',
+  'ธิรัญฎา สุทธิพงศ์',
+  'ศิรดา แสงไพบูลย์',
+  'อภิสรา กูลวงศ์ธนโรจน์',
+].map(normaliseName));
+
 /** Return management entry for a person, or null */
 function getMgmt(person) {
   const key = normaliseName(`${person.firstname} ${person.lastname}`);
@@ -547,11 +562,11 @@ function buildOverallRows(persons, S, isIntern) {
       p.rank      || '',                                     // F: rank (supabase 'rank')
       p.type      || '',                                     // G: type (supabase 'type')
       p.std_score  ?? 2200,                                  // H
-      (getMgmt(p)?.amount ?? p.boss_score ?? 0),             // I: mgmt amount or boss score
+      DEPT_HEAD_SET.has(normaliseName(`${p.firstname} ${p.lastname}`)) ? 1320 : 0, // I: dept-head extra score
       p.score ?? p.perf_score ?? 0,                          // J: score (SB 'score' overrides 'performance_score')
       `=I${r}+J${r}`,                                       // K
       `=K${r}-H${r}`,                                       // L
-      p.mgmt_fee   ?? 0,                                     // M
+      getMgmt(p)?.amount ?? p.boss_score ?? 0,              // M: mgmt amount or boss score (moved from I)
       `=ROUNDDOWN(V${r}*${rateCell},0)`,                    // N
       `=M${r}+N${r}`,                                       // O
       ' ',                                                   // P: remark
@@ -839,8 +854,7 @@ async function buildDeptSheets(sheets, ssId, depTmplSheetId, allPersons, beYear,
         formulaData.push({ range: `'${dept}'!F${r}`, values: [[`='${internSheetName}'!N${rowNum}`]] });
         formulaData.push({ range: `'${dept}'!G${r}`, values: [[`=E${r}+F${r}`]] });
       } else {
-        // E: always reference staff!M so dept sheet stays in sync with Supabase mgmt_fee
-        formulaData.push({ range: `'${dept}'!E${r}`, values: [[`='${staffSheetName}'!M${rowNum}`]] });
+        // E: direct amount from MANAGEMENT_DATA (written in rows above); no formula override
         formulaData.push({ range: `'${dept}'!F${r}`, values: [[`='${staffSheetName}'!N${rowNum}`]] });
         formulaData.push({ range: `'${dept}'!G${r}`, values: [[`=E${r}+F${r}`]] });
       }
