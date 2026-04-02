@@ -711,6 +711,11 @@ async function writeOverallSignature(sheets, ssId, sheetName, sheetId, lastRow) 
             cell: { userEnteredFormat: { horizontalAlignment: 'CENTER', textFormat: { bold: true } } },
             fields: 'userEnteredFormat(horizontalAlignment,textFormat)',
         }},
+        { repeatCell: {
+            range: gridRange(sheetId, sig1 - 2, 0, sig2 - 1, 25),
+            cell: { userEnteredFormat: { textFormat: { fontFamily: 'TH SarabunPSK', fontSize: 16 } } },
+            fields: 'userEnteredFormat.textFormat.fontFamily,userEnteredFormat.textFormat.fontSize',
+        }},
       ],
     },
   }));
@@ -868,6 +873,7 @@ async function buildDeptSheets(sheets, ssId, depTmplSheetId, allPersons, beYear,
         { mergeCells: { range: gridRange(sheetId, sig2-1, 0, sig2-1, 8), mergeType: 'MERGE_ALL' } }, // A:I
         { repeatCell: { range: gridRange(sheetId, sig1-1, 0, sig1-1, 8), cell: { userEnteredFormat: { horizontalAlignment: 'CENTER', textFormat: { bold: true } } }, fields: 'userEnteredFormat(horizontalAlignment,textFormat)' } },
         { repeatCell: { range: gridRange(sheetId, sig2-1, 0, sig2-1, 8), cell: { userEnteredFormat: { horizontalAlignment: 'CENTER', textFormat: { bold: true } } }, fields: 'userEnteredFormat(horizontalAlignment,textFormat)' } },
+        { repeatCell: { range: gridRange(sheetId, sig1-1, 0, sig2-1, 8), cell: { userEnteredFormat: { textFormat: { fontFamily: 'TH SarabunPSK', fontSize: 16 } } }, fields: 'userEnteredFormat.textFormat.fontFamily,userEnteredFormat.textFormat.fontSize' } },
       ]},
     }));
   }
