@@ -14,7 +14,6 @@ require('dotenv').config();
 const { google }       = require('googleapis');
 const { createClient } = require('@supabase/supabase-js');
 const ExcelJS          = require('exceljs');
-const JSZip            = require('jszip');
 const { Readable }     = require('stream');
 
 // ═══════════════════════════════════════════════════════════════════
@@ -394,62 +393,19 @@ function isSheetEmpty(ws) {
   return dataRows <= 1; // 0 or 1 rows with data = only a header (or blank)
 }
 
-async function stripFormulas(buffer) {
-  const zip = await JSZip.loadAsync(buffer);
-  const paths = Object.keys(zip.files).filter(p => /^xl\/worksheets\/sheet\d+\.xml$/.test(p));
-  for (const path of paths) {
-    let xml = await zip.files[path].async('string');
-    xml = xml.replace(/<f\b[^>]*>[\s\S]*?<\/f>/g, '');
-    xml = xml.replace(/<f\b[^/]*\/>/g, '');
-    xml = xml.replace(/\s+si="\d+"/g, '');
-    xml = xml.replace(/\s+t="shared"/g, '');
-    zip.file(path, xml);
-  }
-  return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
-}
-
 async function loadWorkbook(buffer) {
-  const cleaned = await stripFormulas(buffer);
   const wb = new ExcelJS.Workbook();
-  await wb.xlsx.load(cleaned);
+  await wb.xlsx.load(buffer);
   return wb;
 }
 
-function resolveCellValue(v) {
-  if (v === null || v === undefined) return null;
-  if (v instanceof Date) return v;
-  if (typeof v === 'object') {
-    if ('richText' in v) return v.richText.map(r => r.text).join('');
-    if ('text'     in v) return v.text;
-    if ('result'   in v) return v.result;
-    if ('error'    in v) return null;
-  }
-  return v;
-}
-
+/**
+ * Copy srcWS into dstWS via ExcelJS's internal model — preserves all rows,
+ * columns, merges, styles, views, page setup, freeze panes, formulas, etc.
+ * Tab colour is NOT copied (caller sets it separately via dstWS.properties).
+ */
 function copyWorksheet(srcWS, dstWS) {
-  srcWS.columns.forEach((srcCol, idx) => {
-    const dstCol = dstWS.getColumn(idx + 1);
-    if (srcCol.width)        dstCol.width       = srcCol.width;
-    if (srcCol.hidden)       dstCol.hidden       = srcCol.hidden;
-    if (srcCol.outlineLevel) dstCol.outlineLevel = srcCol.outlineLevel;
-  });
-  srcWS.eachRow({ includeEmpty: true }, (srcRow, rowNumber) => {
-    const dstRow = dstWS.getRow(rowNumber);
-    if (srcRow.height)       dstRow.height      = srcRow.height;
-    if (srcRow.hidden)       dstRow.hidden       = srcRow.hidden;
-    if (srcRow.outlineLevel) dstRow.outlineLevel = srcRow.outlineLevel;
-    srcRow.eachCell({ includeEmpty: true }, (srcCell, colNumber) => {
-      const dstCell = dstWS.getCell(rowNumber, colNumber);
-      dstCell.value = resolveCellValue(srcCell.value);
-      if (srcCell.style && Object.keys(srcCell.style).length > 0)
-        dstCell.style = JSON.parse(JSON.stringify(srcCell.style));
-    });
-    dstRow.commit();
-  });
-  if (srcWS.model?.merges) {
-    for (const m of srcWS.model.merges) { try { dstWS.mergeCells(m); } catch (_) {} }
-  }
+  dstWS.model = Object.assign({}, srcWS.model, { id: dstWS.id, name: dstWS.name });
 }
 
 function sortByDeptThenName(a, b, deptMap) {
@@ -502,11 +458,11 @@ async function mergeAndUpload(drive, driveFiles, supabasePersons, monthKey) {
 
     const dept    = deptMap[file.normName] ?? '';
     const tabArgb = hexToArgb(DEPT_COLORS[dept]);
-    const outWS   = mergedWB.addWorksheet(sheetName, {
-      properties: tabArgb ? { tabColor: { argb: tabArgb } } : {},
-    });
+    const outWS   = mergedWB.addWorksheet(sheetName);
     sheetCount++;
     copyWorksheet(targetWS, outWS);
+    // Set tab colour after model copy (model copy resets properties to source values)
+    if (tabArgb) outWS.properties.tabColor = { argb: tabArgb };
     totalRows += Math.max(0, outWS.rowCount - 1);
     log(`      → ${outWS.rowCount} rows copied to "${sheetName}" [${dept || '?'}]${tabArgb ? ' 🎨' : ''}`);
   }
