@@ -111,8 +111,19 @@ def copy_sheet(src_ws, dst_wb, sheet_name, tab_color=None):
         dst_ws.print_area = src_ws.print_area
 
     # ── Freeze panes ─────────────────────────────────────────────────
-    if src_ws.freeze_panes:
-        dst_ws.freeze_panes = src_ws.freeze_panes
+    # Use ySplit/xSplit directly rather than freeze_panes (which returns
+    # topLeftCell — i.e. where the user had *scrolled* the bottom pane —
+    # not the actual freeze boundary).  Using topLeftCell would freeze
+    # far too many rows when the bottom pane was scrolled down.
+    pane = src_ws.sheet_view.pane
+    if pane is not None and pane.state == 'frozen':
+        from openpyxl.utils import get_column_letter
+        x_split = int(pane.xSplit or 0)
+        y_split = int(pane.ySplit or 0)
+        if x_split > 0 or y_split > 0:
+            col = get_column_letter(x_split + 1)
+            row = y_split + 1
+            dst_ws.freeze_panes = f'{col}{row}'
 
     # ── Sheet view (zoom, grid lines, row/col headers) ───────────────
     sv = src_ws.sheet_view
