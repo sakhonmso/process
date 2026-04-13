@@ -519,7 +519,7 @@ function buildOverallRows(persons, S, isIntern) {
       p.type      || '',                                     // G: type (supabase 'type')
       p.std_score  ?? 2200,                                  // H
       DEPT_HEAD_SET.has(normaliseName(`${p.firstname} ${p.lastname}`)) ? 1320 : 0, // I: dept-head extra score
-      p.score ?? p.perf_score ?? 0,                          // J: score (SB 'score' overrides 'performance_score')
+      (p.score ?? p.perf_score ?? 0) - (DEPT_HEAD_SET.has(normaliseName(`${p.firstname} ${p.lastname}`)) ? 1320 : 0), // J: score minus dept-head extra (already in col I)
       `=I${r}+J${r}`,                                       // K
       `=K${r}-H${r}`,                                       // L
       getMgmt(p)?.amount ?? p.boss_score ?? 0,              // M: mgmt amount or boss score (moved from I)
