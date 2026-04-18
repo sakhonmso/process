@@ -556,10 +556,16 @@ async function excelToRows(buffer) {
     row.eachCell({ includeEmpty: true }, (cell, colNum) => {
       let val = cell.value;
       if (val !== null && typeof val === 'object') {
-        if (val instanceof Date)          val = val.toISOString();
-        else if (val.richText)            val = val.richText.map(r => r.text).join('');
-        else if (val.result !== undefined) val = val.result;   // formula — use cached result
-        else if (val.text !== undefined)   val = val.text;
+        if (val instanceof Date)           val = val.toISOString();
+        else if (val.richText)             val = val.richText.map(r => r.text).join('');
+        else if (val.result !== undefined) {
+          val = val.result;
+          // result itself can be a Date (date formula) or error object {error:'#REF!'}
+          if (val instanceof Date)                          val = val.toISOString();
+          else if (val !== null && typeof val === 'object') val = null;
+        }
+        else if (val.formula !== undefined) val = null;  // formula with no cached result
+        else if (val.text !== undefined)    val = val.text;
         else                               val = String(val);
       }
       obj[`col_${colNum}`] = val;
