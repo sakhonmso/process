@@ -18,6 +18,7 @@ const fs                = require('fs');
 const os                = require('os');
 const path              = require('path');
 const { spawnSync }     = require('child_process');
+const ExcelJS           = require('exceljs');
 
 // ═══════════════════════════════════════════════════════════════════
 //  CONFIG
@@ -381,6 +382,245 @@ function listsMatch(driveNames, supabasePersons) {
     if (s1[i] !== s2[i]) { log(`  [Compare] Mismatch: "${s1[i]}" ≠ "${s2[i]}"`, 'warn'); ok = false; }
   }
   return ok;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  STEP 4.5 — Fill missing scores from Excel (ported from claude-analyst.js)
+// ═══════════════════════════════════════════════════════════════════
+
+// ── Score extraction constants ────────────────────────────────────
+const GRAND_TOTAL_LABELS = [
+  'รวมแต้มทั้งหมด', 'รวมคะแนนทั้งหมด', 'รวมทั้งสิ้น', 'ยอดรวมทั้งหมด',
+  'รวมทั้งหมด', 'คะแนนรวมทั้งหมด',
+];
+const SUBTOTAL_LABELS = [
+  'รวมคะแนน', 'รวมแต้ม', 'คะแนนรวม', 'ผลรวม', 'รวม',
+];
+const TOTAL_LABELS = [...GRAND_TOTAL_LABELS, ...SUBTOTAL_LABELS];
+
+function isYearLike(n) {
+  if (n >= 1900 && n <= 2099) return true;
+  if (n >= 2400 && n <= 2699 && Number.isInteger(n)) return true;
+  return false;
+}
+
+function toNum(val) {
+  if (val === null || val === undefined || val === '') return NaN;
+  if (typeof val === 'number')  return val;
+  if (typeof val === 'boolean') return NaN;
+  const s = String(val).trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return NaN;
+  return parseFloat(s.replace(/,/g, ''));
+}
+
+function numsFromText(val) {
+  const s = String(val ?? '').replace(/,/g, '');
+  return [...s.matchAll(/\d+(?:\.\d+)?/g)]
+    .map(m => parseFloat(m[0]))
+    .filter(n => !isNaN(n) && n > 0 && !isYearLike(n));
+}
+
+function collectScoreCandidates(rows) {
+  const results = [];
+  for (const row of rows) {
+    for (const val of Object.values(row)) {
+      const n = toNum(val);
+      if (isNaN(n) || n <= 0 || isYearLike(n)) continue;
+      results.push(n);
+    }
+  }
+  return results;
+}
+
+function extractScoreFromRows(rows) {
+  if (!Array.isArray(rows) || rows.length === 0) return { score: null, method: 'no rows' };
+
+  // Pass 1: grand-total labels (search all columns — these never appear as column headers)
+  const grandCandidates = [];
+  for (const row of rows) {
+    const allValues = Object.values(row).map(v => String(v ?? ''));
+    const labelCells = allValues.filter(s => GRAND_TOTAL_LABELS.some(lbl => s.includes(lbl)));
+    if (labelCells.length > 0) {
+      grandCandidates.push(...collectScoreCandidates([row]));
+      grandCandidates.push(...labelCells.flatMap(s => numsFromText(s)));
+    }
+  }
+  if (grandCandidates.length > 0) {
+    return { score: Math.max(...grandCandidates), method: 'grand-total label row' };
+  }
+
+  // Pass 2: sub-total labels (first 3 columns only — avoids col-header false matches)
+  const subCandidates = [];
+  for (const row of rows) {
+    const firstThree = ['col_1', 'col_2', 'col_3'].map(k => String(row[k] ?? ''));
+    if (firstThree.some(s => SUBTOTAL_LABELS.some(lbl => s.includes(lbl)))) {
+      subCandidates.push(...collectScoreCandidates([row]));
+    }
+  }
+  if (subCandidates.length > 0) {
+    const subMax  = Math.max(...subCandidates);
+    const allNums = collectScoreCandidates(rows);
+    const sheetMax = allNums.length > 0 ? Math.max(...allNums) : subMax;
+    if (sheetMax > subMax) return { score: sheetMax, method: 'largest in sheet (exceeds sub-total rows)' };
+    return { score: subMax, method: 'sub-total label row' };
+  }
+
+  // Pass 3: largest valid number in the whole sheet
+  const all = collectScoreCandidates(rows);
+  if (all.length > 0) return { score: Math.max(...all), method: 'largest in sheet' };
+
+  // Pass 4: weight × day-count (last resort for formula-only sheets)
+  let computedTotal = 0;
+  for (const row of rows) {
+    const isLabel = ['col_1', 'col_2', 'col_3']
+      .some(k => TOTAL_LABELS.some(lbl => String(row[k] ?? '').includes(lbl)));
+    if (isLabel) continue;
+    const weightRaw = row['col_3'];
+    if (weightRaw == null) continue;
+    let weight = typeof weightRaw === 'number'
+      ? weightRaw
+      : parseFloat(String(weightRaw).replace(/,/g, '').match(/^(\d+\.?\d*)/)?.[1] ?? 'NaN');
+    if (isNaN(weight) || weight <= 0) continue;
+    let daySum = 0;
+    for (let d = 6; d <= 36; d++) {
+      const v = toNum(row[`col_${d}`]);
+      if (!isNaN(v) && v > 0) daySum += v;
+    }
+    if (daySum > 0) computedTotal += weight * daySum;
+  }
+  if (computedTotal > 0) return { score: computedTotal, method: 'weight × day-count' };
+
+  return { score: null, method: 'no candidates found' };
+}
+
+function resolveScore(rows) {
+  const { score: jsScore, method: jsMethod } = extractScoreFromRows(rows);
+
+  const isGrandRow = row =>
+    Object.values(row).some(v => GRAND_TOTAL_LABELS.some(lbl => String(v ?? '').includes(lbl)));
+  const isSubRow = row =>
+    ['col_1', 'col_2', 'col_3'].some(k => SUBTOTAL_LABELS.some(lbl => String(row[k] ?? '').includes(lbl)));
+  const rowNums = row =>
+    Object.values(row).map(toNum).filter(n => !isNaN(n) && n > 0 && !isYearLike(n));
+
+  // Detect: grand-total label row present but holds no numbers (uncached formula)
+  const grandRowEmpty = rows.some(row => isGrandRow(row) && rowNums(row).length === 0);
+  if (!grandRowEmpty) return { score: jsScore, method: jsMethod };
+
+  const populated = rows.filter(r => isSubRow(r) && rowNums(r).length > 0);
+  const empty     = rows.filter(r => isSubRow(r) && rowNums(r).length === 0);
+
+  // Tier 1: sum max from each populated sub-total row
+  const subtotalSum = populated.reduce((s, r) => s + Math.max(...rowNums(r)), 0);
+
+  // Tier 2: when some sub-totals also uncached, sum score column from data rows
+  let dataRowSum = 0;
+  if (populated.length > 0 && empty.length > 0) {
+    let scoreColIndex = -1;
+    for (const row of populated) {
+      const indices = Object.keys(row)
+        .filter(k => /^col_\d+$/.test(k) && !isNaN(toNum(row[k])) && toNum(row[k]) > 0)
+        .map(k => parseInt(k.slice(4)));
+      if (indices.length > 0) scoreColIndex = Math.max(scoreColIndex, Math.max(...indices));
+    }
+    if (scoreColIndex > 0) {
+      const scoreColKey = `col_${scoreColIndex}`;
+      for (const row of rows) {
+        if (isSubRow(row) || isGrandRow(row)) continue;
+        const n = toNum(row[scoreColKey]);
+        if (!isNaN(n) && n > 0 && !isYearLike(n)) dataRowSum += n;
+      }
+    }
+  }
+
+  const best = Math.max(subtotalSum, dataRowSum);
+  if (best > 0 && best > (jsScore ?? 0)) {
+    const method = dataRowSum >= subtotalSum
+      ? 'sum of score-column data rows (sub-totals partially uncached)'
+      : 'sum of sub-total rows (grand-total formula uncached)';
+    return { score: best, method };
+  }
+  return { score: jsScore, method: jsMethod };
+}
+
+/** Convert an Excel buffer to the { col_1, col_2, … } row format used by resolveScore */
+async function excelToRows(buffer) {
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(buffer);
+  const ws = wb.worksheets[0];
+  if (!ws) return [];
+
+  const rows = [];
+  ws.eachRow({ includeEmpty: false }, row => {
+    const obj = {};
+    row.eachCell({ includeEmpty: true }, (cell, colNum) => {
+      let val = cell.value;
+      if (val !== null && typeof val === 'object') {
+        if (val instanceof Date)          val = val.toISOString();
+        else if (val.richText)            val = val.richText.map(r => r.text).join('');
+        else if (val.result !== undefined) val = val.result;   // formula — use cached result
+        else if (val.text !== undefined)   val = val.text;
+        else                               val = String(val);
+      }
+      obj[`col_${colNum}`] = val;
+    });
+    if (Object.values(obj).some(v => v !== null && v !== undefined && v !== '')) {
+      rows.push(obj);
+    }
+  });
+  return rows;
+}
+
+/** Step 4.5 — for each person with score=null, extract sum score from their Drive Excel */
+async function fillMissingScores(drive, driveFiles, sbData, monthKey, supabase) {
+  const nullScorePersons = sbData.filter(p => p.score === null);
+  if (nullScorePersons.length === 0) {
+    log('  [Score] All persons already have scores');
+    return;
+  }
+  log(`  [Score] ${nullScorePersons.length} person(s) with null score — extracting from Excel…`);
+
+  const driveMap = {};
+  for (const file of driveFiles) {
+    driveMap[normaliseName(stripExt(file.name))] = file;
+  }
+
+  let updated = 0;
+  for (const person of nullScorePersons) {
+    const normName = normaliseName(person.fullname);
+    const file = driveMap[normName];
+    if (!file) {
+      log(`  [Score] ⚠ No Drive file for "${normName}" — skipping`, 'warn');
+      continue;
+    }
+    log(`  [Score] ↓ ${person.fullname}`);
+    try {
+      const buffer = await downloadFile(drive, file.id);
+      const rows   = await excelToRows(buffer);
+      const { score, method } = resolveScore(rows);
+      if (score === null || score <= 0) {
+        log(`  [Score] ⚠ "${normName}" — could not extract (${method})`, 'warn');
+        continue;
+      }
+      log(`  [Score]   → ${score.toFixed(2)}  (${method})`);
+
+      if (person.index !== null) {
+        const { error } = await supabase
+          .from(monthKey)
+          .update({ [SB.score]: score })
+          .eq(SB.index, person.index);
+        if (error) {
+          log(`  [Score] ⚠ Supabase update failed for "${normName}": ${error.message}`, 'warn');
+        } else {
+          person.score = score;  // keep sbData consistent for Step 5+
+          updated++;
+        }
+      }
+    } catch (err) {
+      log(`  [Score] ⚠ Error for "${normName}": ${err.message}`, 'warn');
+    }
+  }
+  log(`  [Score] ✓ ${updated}/${nullScorePersons.length} scores extracted and saved`);
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -1137,6 +1377,11 @@ function showDataflow() {
   console.log('               Step 4: validate lists match');
   console.log('                            │');
   console.log('                            ▼');
+  console.log('          Step 4.5: fill missing scores          ←── Google Drive (Excel)');
+  console.log('               (score=null → extract from        ──► Supabase (score update)');
+  console.log('                physician Excel, save to SB)');
+  console.log('                            │');
+  console.log('                            ▼');
   console.log('               Step 5: merge → one workbook');
   console.log('                    (1 sheet per person,');
   console.log('                     sorted by department)');
@@ -1225,6 +1470,10 @@ async function main() {
         results.skipped++; console.log('└─ skipped\n'); continue;
       }
       log('  → ✓ Match');
+
+      // Step 4.5
+      log('  [Step 4.5] Filling missing scores…');
+      await fillMissingScores(drive, driveData.files, sbData, key, supabase);
 
       // Step 5
       log('  [Step 5] Merging…');
