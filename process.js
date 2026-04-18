@@ -1122,6 +1122,39 @@ async function createSK03(drive, sheets, supabasePersons, monthKey, supabase) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
+//  DATAFLOW DIAGRAM
+// ═══════════════════════════════════════════════════════════════════
+function showDataflow() {
+  console.log('');
+  console.log('  ┌──────────────────────┐     ┌──────────────────────┐');
+  console.log('  │     Google Drive      │     │       Supabase        │');
+  console.log('  │  (monthly .xlsx files)│     │  (persons + scores)   │');
+  console.log('  └──────────┬───────────┘     └───────────┬───────────┘');
+  console.log('             │ Step 2: list files           │ Step 3: fetch persons');
+  console.log('             │                             │');
+  console.log('             └──────────────┬──────────────┘');
+  console.log('                            │');
+  console.log('               Step 4: validate lists match');
+  console.log('                            │');
+  console.log('                            ▼');
+  console.log('               Step 5: merge → one workbook');
+  console.log('                    (1 sheet per person,');
+  console.log('                     sorted by department)');
+  console.log('                            │');
+  console.log('                            ▼');
+  console.log('               Step 6: create SK03 spreadsheet');
+  console.log('                    (staff / intern / dept sheets)');
+  console.log('                            │');
+  console.log('             ┌──────────────┴──────────────┐');
+  console.log('             ▼                             ▼');
+  console.log('  ┌──────────────────────┐     ┌──────────────────────┐');
+  console.log('  │     Google Drive      │     │       Supabase        │');
+  console.log('  │  (merged workbook)    │     │  (row_num updated)    │');
+  console.log('  └──────────────────────┘     └──────────────────────┘');
+  console.log('');
+}
+
+// ═══════════════════════════════════════════════════════════════════
 //  MAIN
 // ═══════════════════════════════════════════════════════════════════
 async function main() {
@@ -1163,6 +1196,7 @@ async function main() {
   console.log('══════════════════════════════════════════════════════');
   console.log(' P4P Excel Merge + SK03 Pipeline');
   console.log('══════════════════════════════════════════════════════');
+  showDataflow();
   console.log('Month(s):', months.map(m => m.key).join(', '));
   console.log('');
 
