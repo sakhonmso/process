@@ -1453,6 +1453,13 @@ async function main() {
 
   const results = { processed: 0, skipped: 0, failed: [] };
 
+  // Cap full-pipeline runs to the latest N months that pass Step 4 validation
+  // (i.e. months whose Drive list matches Supabase — all physicians complete).
+  // Months iterate newest-first, so this keeps the most recent complete months
+  // and skips older ones to stay within the GitHub Actions 30-minute budget.
+  const LATEST_COMPLETE_MONTHS = 2;
+  let completedCount = 0;
+
   for (const monthInfo of months) {
     const { key } = monthInfo;
     console.log(`\n┌─ ${key} ${'─'.repeat(46 - key.length)}`);
@@ -1477,6 +1484,16 @@ async function main() {
       }
       log('  → ✓ Match');
 
+      // Stop once we've processed the latest N complete months.
+      // Older complete months are skipped — they've typically been processed
+      // by a prior run and re-processing them would blow the timeout.
+      if (completedCount >= LATEST_COMPLETE_MONTHS) {
+        log(`  → Already processed latest ${LATEST_COMPLETE_MONTHS} complete months — stopping`);
+        results.skipped++;
+        console.log('└─ skipped (limit reached)\n');
+        break;
+      }
+
       // Step 4.5
       log('  [Step 4.5] Filling missing scores…');
       await fillMissingScores(drive, driveData.files, sbData, key, supabase);
@@ -1491,6 +1508,7 @@ async function main() {
       await createSK03(drive, sheets, sbData, key, supabase);
 
       results.processed++;
+      completedCount++;
       console.log('└─ ✓ complete\n');
     } catch (err) {
       console.error(`  [ERROR] ${err.stack ?? err.message}`);
