@@ -1499,6 +1499,15 @@ async function main() {
       log('  [Step 4.5] Filling missing scores…');
       await fillMissingScores(drive, driveData.files, sbData, key, supabase);
 
+      // Guard: all persons must have a non-null score before merge / SK03
+      const nullAfterFill = sbData.filter(p => p.score === null && p.perf_score === 0);
+      if (nullAfterFill.length > 0) {
+        log(`  → ✗ ${nullAfterFill.length} person(s) still have no score after Step 4.5 — skipping merge & SK03`, 'warn');
+        nullAfterFill.forEach(p => log(`    • ${p.fullname}`, 'warn'));
+        results.skipped++; console.log('└─ skipped (null scores)\n'); continue;
+      }
+      log('  → ✓ All scores present');
+
       // Step 5
       log('  [Step 5] Merging…');
       const uploaded = await mergeAndUpload(drive, driveData.files, sbData, key);
