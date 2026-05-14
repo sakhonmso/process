@@ -1016,7 +1016,7 @@ async function buildDeptSheets(sheets, ssId, depTmplSheetId, allPersons, beYear,
         valueInputOption: 'RAW',
         data: [
           { range: `'${dept}'!A2`, values: [[`ประจำเดือน  ${THAI_MONTHS[month]}  พ.ศ.  ${beYear}`]] },
-          { range: `'${dept}'!A3`, values: [[`หน่วยงาน  ${dept} กลุ่มภารกิจ ด้านตติยภูมิ`]] },
+          { range: `'${dept}'!A3`, values: [[`หน่วยงาน  ${dept} กลุ่มภารกิจ ด้าน${dept === 'เวชกรรมสังคม' ? 'ปฐมภูมิ' : 'ตติยภูมิ'}`]] },
         ],
       },
     }));
