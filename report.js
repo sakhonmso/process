@@ -200,7 +200,27 @@ async function getSupabasePersons(supabase, tableKey) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-//  Step 5 — Build Excel workbook (one sheet per month)
+//  Department sort helper — Thai ascending, INTERN last
+// ═══════════════════════════════════════════════════════════════════
+function sortDepartments(depts) {
+  const nonIntern = [...depts].filter(d => d !== 'INTERN').sort((a, b) => a.localeCompare(b, 'th'));
+  return depts.includes('INTERN') ? [...nonIntern, 'INTERN'] : nonIntern;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Shared cell style helpers
+// ═══════════════════════════════════════════════════════════════════
+const BORDER_THIN   = { style: 'thin' };
+const BORDER_MEDIUM = { style: 'medium' };
+const FULL_THIN     = { top: BORDER_THIN,   left: BORDER_THIN,   bottom: BORDER_THIN,   right: BORDER_THIN };
+const FULL_MEDIUM   = { top: BORDER_MEDIUM, left: BORDER_MEDIUM, bottom: BORDER_MEDIUM, right: BORDER_MEDIUM };
+
+// ═══════════════════════════════════════════════════════════════════
+//  Step 5 — Build Excel workbook
+//    Sheet 1  : ภาพรวม  (summary counts by dept × month)
+//    Sheet 2+ : one sheet per incomplete month
+//               - table: ชื่อ-นามสกุล | กลุ่มงาน
+//               - footnote merged 3 rows below table
 // ═══════════════════════════════════════════════════════════════════
 async function buildExcel(monthGroups, runTime) {
   // monthGroups: [{ monthLabel, rows: [{ fullname, department }] }]
@@ -211,13 +231,69 @@ async function buildExcel(monthGroups, runTime) {
   wb.created  = new Date();
   wb.modified = new Date();
 
+  // ── Sheet 1: ภาพรวม ───────────────────────────────────────────────
+  {
+    const ws = wb.addWorksheet('ภาพรวม');
+
+    // Collect all departments across all months
+    const deptSet = new Set();
+    monthGroups.forEach(g => g.rows.forEach(r => deptSet.add(r.department)));
+    const depts = sortDepartments([...deptSet]);
+
+    // Column layout: กลุ่มงาน | month1 | month2 | ... | รวม
+    ws.columns = [
+      { header: 'กลุ่มงาน', key: 'dept', width: 34 },
+      ...monthGroups.map(g => ({ header: g.monthLabel, key: g.monthLabel, width: 20 })),
+      { header: 'รวม', key: 'total', width: 10 },
+    ];
+
+    // Style header row
+    const hdr = ws.getRow(1);
+    hdr.height = 22;
+    hdr.eachCell({ includeEmpty: true }, cell => {
+      cell.font      = { bold: true, size: 11 };
+      cell.fill      = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9E1F2' } };
+      cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      cell.border    = FULL_MEDIUM;
+    });
+
+    // Dept rows
+    for (const dept of depts) {
+      const counts = monthGroups.map(g => g.rows.filter(r => r.department === dept).length);
+      const total  = counts.reduce((s, c) => s + c, 0);
+      const rowData = { dept, total };
+      monthGroups.forEach((g, i) => { rowData[g.monthLabel] = counts[i]; });
+      const row = ws.addRow(rowData);
+      row.height = 18;
+      row.eachCell({ includeEmpty: true }, cell => {
+        cell.border    = FULL_THIN;
+        cell.alignment = { vertical: 'middle', horizontal: cell.col === 1 ? 'left' : 'center' };
+      });
+    }
+
+    // รวม row (totals)
+    const colTotals = monthGroups.map(g => g.rows.length);
+    const grandTotal = colTotals.reduce((s, c) => s + c, 0);
+    const totalRowData = { dept: 'รวม', total: grandTotal };
+    monthGroups.forEach((g, i) => { totalRowData[g.monthLabel] = colTotals[i]; });
+    const totalRow = ws.addRow(totalRowData);
+    totalRow.height = 18;
+    totalRow.eachCell({ includeEmpty: true }, cell => {
+      cell.font      = { bold: true };
+      cell.border    = FULL_MEDIUM;
+      cell.alignment = { vertical: 'middle', horizontal: cell.col === 1 ? 'left' : 'center' };
+    });
+
+    ws.views = [{ state: 'frozen', ySplit: 1 }];
+  }
+
+  // ── Sheets 2+: one per incomplete month ───────────────────────────
   for (const group of monthGroups) {
     const ws = wb.addWorksheet(group.monthLabel);
 
     ws.columns = [
-      { header: 'ชื่อ-นามสกุล',   key: 'fullname',   width: 36 },
-      { header: 'กลุ่มงาน',      key: 'department', width: 32 },
-      { header: 'ตรวจสอบเมื่อ',   key: 'checkedAt',  width: 22 },
+      { header: 'ชื่อ-นามสกุล', key: 'fullname',   width: 36 },
+      { header: 'กลุ่มงาน',    key: 'department', width: 32 },
     ];
 
     // Header row styling
@@ -227,36 +303,36 @@ async function buildExcel(monthGroups, runTime) {
       cell.font      = { bold: true, size: 11 };
       cell.fill      = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9E1F2' } };
       cell.alignment = { horizontal: 'center', vertical: 'middle' };
-      cell.border    = {
-        top:    { style: 'medium' },
-        left:   { style: 'medium' },
-        bottom: { style: 'medium' },
-        right:  { style: 'medium' },
-      };
+      cell.border    = FULL_MEDIUM;
     });
 
     if (group.rows.length === 0) {
-      const row = ws.addRow(['ไม่มีข้อมูลที่ขาดส่ง', '', '']);
-      ws.mergeCells(`A${row.number}:C${row.number}`);
+      const row = ws.addRow(['ไม่มีข้อมูลที่ขาดส่ง', '']);
+      ws.mergeCells(`A${row.number}:B${row.number}`);
       row.getCell(1).alignment = { horizontal: 'center' };
       row.getCell(1).font      = { italic: true, color: { argb: 'FF888888' } };
     } else {
       group.rows.forEach(r => {
-        const row = ws.addRow({ fullname: r.fullname, department: r.department, checkedAt: runTime });
+        const row = ws.addRow({ fullname: r.fullname, department: r.department });
         row.height = 18;
         row.eachCell({ includeEmpty: true }, cell => {
-          cell.border = {
-            top:    { style: 'thin' },
-            left:   { style: 'thin' },
-            bottom: { style: 'thin' },
-            right:  { style: 'thin' },
-          };
+          cell.border    = FULL_THIN;
           cell.alignment = { vertical: 'middle' };
         });
       });
     }
 
-    // Freeze header row
+    // Footnote: merged A:B, 3 rows below last data row, full border
+    const lastDataRowNum = 1 + Math.max(group.rows.length, 1); // header + data (min 1)
+    const footnoteRowNum = lastDataRowNum + 3;
+    ws.mergeCells(`A${footnoteRowNum}:B${footnoteRowNum}`);
+    const footnoteCell = ws.getCell(`A${footnoteRowNum}`);
+    footnoteCell.value     = `ตรวจสอบเมื่อ : ${runTime}`;
+    footnoteCell.border    = FULL_THIN;
+    footnoteCell.alignment = { horizontal: 'center', vertical: 'middle' };
+    footnoteCell.font      = { italic: true, size: 10 };
+    ws.getRow(footnoteRowNum).height = 18;
+
     ws.views = [{ state: 'frozen', ySplit: 1 }];
   }
 
