@@ -263,32 +263,21 @@ async function buildExcel(monthGroups, runTime, allDepts) {
       cell.border    = FULL_MEDIUM;
     });
 
-    // Helper: add a dept row with given style
-    const addDeptRow = (dept, disabled) => {
+    // Incomplete dept rows
+    for (const dept of incompleteDepts) {
       const counts  = monthGroups.map(g => g.rows.filter(r => r.department === dept).length);
       const total   = counts.reduce((s, c) => s + c, 0);
       const rowData = { dept, total };
-      monthGroups.forEach((g, i) => { rowData[g.monthLabel] = disabled ? '-' : counts[i]; });
-      if (disabled) rowData.total = '-';
+      monthGroups.forEach((g, i) => { rowData[g.monthLabel] = counts[i]; });
       const row = ws.addRow(rowData);
       row.height = 18;
       row.eachCell({ includeEmpty: true }, cell => {
         cell.border    = FULL_THIN;
         cell.alignment = { vertical: 'middle', horizontal: cell.col === 1 ? 'left' : 'center' };
-        if (disabled) {
-          cell.font = { color: { argb: 'FFAAAAAa' }, italic: true };
-          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF5F5F5' } };
-        }
       });
-    };
+    }
 
-    // Incomplete dept rows (normal style)
-    for (const dept of incompleteDepts) addDeptRow(dept, false);
-
-    // Complete dept rows (disabled style)
-    for (const dept of completeDepts) addDeptRow(dept, true);
-
-    // รวม row (totals — based on incomplete depts only)
+    // รวม row (totals)
     const colTotals = monthGroups.map(g => g.rows.length);
     const grandTotal = colTotals.reduce((s, c) => s + c, 0);
     const totalRowData = { dept: 'รวม', total: grandTotal };
@@ -300,6 +289,21 @@ async function buildExcel(monthGroups, runTime, allDepts) {
       cell.border    = FULL_MEDIUM;
       cell.alignment = { vertical: 'middle', horizontal: cell.col === 1 ? 'left' : 'center' };
     });
+
+    // Footnote: completed depts merged across all columns, row immediately below รวม
+    if (completeDepts.length > 0) {
+      const totalColCount = 1 + monthGroups.length + 1; // กลุ่มงาน + months + รวม
+      const lastColLetter = ws.getColumn(totalColCount).letter;
+      const footnoteRowNum = totalRow.number + 1;
+      ws.mergeCells(`A${footnoteRowNum}:${lastColLetter}${footnoteRowNum}`);
+      const fnCell = ws.getCell(`A${footnoteRowNum}`);
+      fnCell.value     = `กลุ่มงานที่ครบถ้วน : ${completeDepts.join('  |  ')}`;
+      fnCell.border    = FULL_THIN;
+      fnCell.alignment = { horizontal: 'left', vertical: 'middle' };
+      fnCell.font      = { italic: true, size: 10, color: { argb: 'FFFFFFFF' } };
+      fnCell.fill      = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF000000' } };
+      ws.getRow(footnoteRowNum).height = 18;
+    }
 
     ws.views = [{ state: 'frozen', ySplit: 1 }];
   }
