@@ -297,12 +297,12 @@ async function buildExcel(monthGroups, runTime, allDepts) {
       const footnoteRowNum = totalRow.number + 1;
       ws.mergeCells(`A${footnoteRowNum}:${lastColLetter}${footnoteRowNum}`);
       const fnCell = ws.getCell(`A${footnoteRowNum}`);
-      fnCell.value     = `กลุ่มงานที่ครบถ้วน : ${completeDepts.join('  |  ')}`;
+      fnCell.value     = `กลุ่มงานที่ครบถ้วน :\n${completeDepts.map(d => `  • ${d}`).join('\n')}`;
       fnCell.border    = FULL_THIN;
-      fnCell.alignment = { horizontal: 'left', vertical: 'middle' };
+      fnCell.alignment = { horizontal: 'left', vertical: 'top', wrapText: true };
       fnCell.font      = { italic: true, size: 10, color: { argb: 'FF000000' } };
       fnCell.fill      = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFFFF' } };
-      ws.getRow(footnoteRowNum).height = 18;
+      ws.getRow(footnoteRowNum).height = 18 * (completeDepts.length + 1);
     }
 
     ws.views = [{ state: 'frozen', ySplit: 1 }];
