@@ -51,6 +51,25 @@ const THAI_MONTHS = {
   10: 'ตุลาคม', 11: 'พฤศจิกายน', 12: 'ธันวาคม',
 };
 
+const THAI_MONTH_ABBR = {
+  1: 'ม.ค.',  2: 'ก.พ.',  3: 'มี.ค.',
+  4: 'เม.ย.', 5: 'พ.ค.',  6: 'มิ.ย.',
+  7: 'ก.ค.',  8: 'ส.ค.',  9: 'ก.ย.',
+  10: 'ต.ค.', 11: 'พ.ย.', 12: 'ธ.ค.',
+};
+
+/** Format current Bangkok time as "25 เม.ย. 69, 14.14" */
+function formatRunTime() {
+  // Bangkok = UTC+7
+  const now = new Date(Date.now() + 7 * 60 * 60 * 1000);
+  const day    = now.getUTCDate();
+  const month  = now.getUTCMonth() + 1;
+  const year   = String(now.getUTCFullYear() + 543).slice(-2);
+  const hour   = String(now.getUTCHours()).padStart(2, '0');
+  const minute = String(now.getUTCMinutes()).padStart(2, '0');
+  return `${day} ${THAI_MONTH_ABBR[month]} ${year}, ${hour}.${minute}`;
+}
+
 // ═══════════════════════════════════════════════════════════════════
 //  Utilities
 // ═══════════════════════════════════════════════════════════════════
@@ -183,7 +202,7 @@ async function getSupabasePersons(supabase, tableKey) {
 // ═══════════════════════════════════════════════════════════════════
 //  Step 5 — Build Excel workbook (one sheet per month)
 // ═══════════════════════════════════════════════════════════════════
-async function buildExcel(monthGroups) {
+async function buildExcel(monthGroups, runTime) {
   // monthGroups: [{ monthLabel, rows: [{ fullname, department }] }]
   // already in descending month order; rows sorted by Thai name asc
 
@@ -196,8 +215,9 @@ async function buildExcel(monthGroups) {
     const ws = wb.addWorksheet(group.monthLabel);
 
     ws.columns = [
-      { header: 'ชื่อ-นามสกุล', key: 'fullname',   width: 36 },
-      { header: 'กลุ่มงาน',    key: 'department', width: 32 },
+      { header: 'ชื่อ-นามสกุล',   key: 'fullname',   width: 36 },
+      { header: 'กลุ่มงาน',      key: 'department', width: 32 },
+      { header: 'ตรวจสอบเมื่อ',   key: 'checkedAt',  width: 22 },
     ];
 
     // Header row styling
@@ -216,13 +236,13 @@ async function buildExcel(monthGroups) {
     });
 
     if (group.rows.length === 0) {
-      const row = ws.addRow(['ไม่มีข้อมูลที่ขาดส่ง', '']);
-      ws.mergeCells(`A${row.number}:B${row.number}`);
+      const row = ws.addRow(['ไม่มีข้อมูลที่ขาดส่ง', '', '']);
+      ws.mergeCells(`A${row.number}:C${row.number}`);
       row.getCell(1).alignment = { horizontal: 'center' };
       row.getCell(1).font      = { italic: true, color: { argb: 'FF888888' } };
     } else {
       group.rows.forEach(r => {
-        const row = ws.addRow({ fullname: r.fullname, department: r.department });
+        const row = ws.addRow({ fullname: r.fullname, department: r.department, checkedAt: runTime });
         row.height = 18;
         row.eachCell({ includeEmpty: true }, cell => {
           cell.border = {
@@ -363,8 +383,9 @@ async function main() {
   console.log('');
 
   // Build and upload Excel
-  log('[Excel] Building workbook…');
-  const buffer   = await buildExcel(monthGroups);
+  const runTime = formatRunTime();
+  log(`[Excel] Building workbook (ตรวจสอบเมื่อ: ${runTime})…`);
+  const buffer   = await buildExcel(monthGroups, runTime);
   log('[Drive] Uploading report…');
   const uploaded = await uploadReport(drive, buffer);
   log(`\n✓ Report saved: ${uploaded.webViewLink}`);
