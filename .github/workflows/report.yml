@@ -1,0 +1,45 @@
+name: Missing Submission Report
+
+on:
+  schedule:
+    # Runs every day at 01:00 UTC (08:00 Bangkok time, UTC+7)
+    - cron: '0 1 * * *'
+  workflow_dispatch: # allow manual trigger from GitHub UI
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run missing submission report
+        env:
+          GOOGLE_CLIENT_ID:      ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET:  ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_REFRESH_TOKEN:  ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+          GOOGLE_ROOT_FOLDER_ID: ${{ secrets.GOOGLE_ROOT_FOLDER_ID }}
+          SUPABASE_URL:          ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY:          ${{ secrets.SUPABASE_KEY }}
+        run: node report.js
+
+      - name: Upload run log as artifact
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: report-log-${{ github.run_number }}
+          path: |
+            *.log
+          if-no-files-found: ignore
+          retention-days: 30
