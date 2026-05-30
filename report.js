@@ -246,11 +246,10 @@ async function buildExcel(monthGroups, runTime, allDepts) {
       [...(allDepts ?? [])].filter(d => !incompleteDeptSet.has(d))
     );
 
-    // Column layout: กลุ่มงาน | month1 | month2 | ... | รวม
+    // Column layout: กลุ่มงาน | month1 | month2 | ...
     ws.columns = [
       { header: 'กลุ่มงาน', key: 'dept', width: 34 },
       ...monthGroups.map(g => ({ header: g.monthLabel, key: g.monthLabel, width: 20 })),
-      { header: 'รวม', key: 'total', width: 10 },
     ];
 
     // Style header row
@@ -266,8 +265,7 @@ async function buildExcel(monthGroups, runTime, allDepts) {
     // Incomplete dept rows
     for (const dept of incompleteDepts) {
       const counts  = monthGroups.map(g => g.rows.filter(r => r.department === dept).length);
-      const total   = counts.reduce((s, c) => s + c, 0);
-      const rowData = { dept, total };
+      const rowData = { dept };
       monthGroups.forEach((g, i) => { rowData[g.monthLabel] = counts[i]; });
       const row = ws.addRow(rowData);
       row.height = 18;
@@ -279,8 +277,7 @@ async function buildExcel(monthGroups, runTime, allDepts) {
 
     // รวม row (totals)
     const colTotals = monthGroups.map(g => g.rows.length);
-    const grandTotal = colTotals.reduce((s, c) => s + c, 0);
-    const totalRowData = { dept: 'รวม', total: grandTotal };
+    const totalRowData = { dept: 'รวม' };
     monthGroups.forEach((g, i) => { totalRowData[g.monthLabel] = colTotals[i]; });
     const totalRow = ws.addRow(totalRowData);
     totalRow.height = 18;
@@ -292,7 +289,7 @@ async function buildExcel(monthGroups, runTime, allDepts) {
 
     // Footnote: completed depts merged across all columns, row immediately below รวม
     if (completeDepts.length > 0) {
-      const totalColCount = 1 + monthGroups.length + 1; // กลุ่มงาน + months + รวม
+      const totalColCount = 1 + monthGroups.length; // กลุ่มงาน + months
       const lastColLetter = ws.getColumn(totalColCount).letter;
       const footnoteRowNum = totalRow.number + 1;
       ws.mergeCells(`A${footnoteRowNum}:${lastColLetter}${footnoteRowNum}`);
