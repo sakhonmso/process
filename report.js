@@ -220,7 +220,7 @@ const FULL_MEDIUM   = { top: BORDER_MEDIUM, left: BORDER_MEDIUM, bottom: BORDER_
 //    Sheet 1  : ภาพรวม  (summary counts by dept × month)
 //    Sheet 2+ : one sheet per incomplete month
 //               - table: ชื่อ-นามสกุล | กลุ่มงาน
-//               - footnote merged 3 rows below table
+//               - footnote merged row immediately below table
 // ═══════════════════════════════════════════════════════════════════
 async function buildExcel(monthGroups, runTime) {
   // monthGroups: [{ monthLabel, rows: [{ fullname, department }] }]
@@ -322,15 +322,16 @@ async function buildExcel(monthGroups, runTime) {
       });
     }
 
-    // Footnote: merged A:B, 3 rows below last data row, full border
+    // Footnote: merged A:B, row immediately below last data row, black bg / white text
     const lastDataRowNum = 1 + Math.max(group.rows.length, 1); // header + data (min 1)
-    const footnoteRowNum = lastDataRowNum + 3;
+    const footnoteRowNum = lastDataRowNum + 1;
     ws.mergeCells(`A${footnoteRowNum}:B${footnoteRowNum}`);
     const footnoteCell = ws.getCell(`A${footnoteRowNum}`);
     footnoteCell.value     = `ตรวจสอบเมื่อ : ${runTime}`;
     footnoteCell.border    = FULL_THIN;
     footnoteCell.alignment = { horizontal: 'center', vertical: 'middle' };
-    footnoteCell.font      = { italic: true, size: 10 };
+    footnoteCell.font      = { italic: true, size: 10, color: { argb: 'FFFFFFFF' } };
+    footnoteCell.fill      = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF000000' } };
     ws.getRow(footnoteRowNum).height = 18;
 
     ws.views = [{ state: 'frozen', ySplit: 1 }];
