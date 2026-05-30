@@ -128,12 +128,13 @@ async function listExcelFiles(drive, folderId) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-//  Step 1 — 6-month window (newest first)
+//  Step 1 — 6-month window, excluding the current month (newest first)
 // ═══════════════════════════════════════════════════════════════════
 function getTargetMonths() {
   const now = new Date();
+  // i starts at 1 to skip the current month entirely
   return Array.from({ length: 6 }, (_, i) => {
-    const d      = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const d      = new Date(now.getFullYear(), now.getMonth() - (i + 1), 1);
     const beYear = d.getFullYear() + 543;
     const month  = d.getMonth() + 1;
     const key    = `${beYear}_${String(month).padStart(2, '0')}`;
@@ -180,72 +181,64 @@ async function getSupabasePersons(supabase, tableKey) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-//  Step 5 — Build Excel workbook
+//  Step 5 — Build Excel workbook (one sheet per month)
 // ═══════════════════════════════════════════════════════════════════
-async function buildExcel(reportRows) {
+async function buildExcel(monthGroups) {
+  // monthGroups: [{ monthLabel, rows: [{ fullname, department }] }]
+  // already in descending month order; rows sorted by Thai name asc
+
   const wb = new ExcelJS.Workbook();
   wb.creator  = 'Missing Submission Tracker';
   wb.created  = new Date();
   wb.modified = new Date();
 
-  const ws = wb.addWorksheet('Missing Submissions');
+  for (const group of monthGroups) {
+    const ws = wb.addWorksheet(group.monthLabel);
 
-  ws.columns = [
-    { header: 'เดือน',       key: 'month',      width: 24 },
-    { header: 'ชื่อ-นามสกุล', key: 'fullname',   width: 36 },
-    { header: 'กลุ่มงาน',    key: 'department', width: 32 },
-  ];
+    ws.columns = [
+      { header: 'ชื่อ-นามสกุล', key: 'fullname',   width: 36 },
+      { header: 'กลุ่มงาน',    key: 'department', width: 32 },
+    ];
 
-  // Header row styling
-  const headerRow = ws.getRow(1);
-  headerRow.height = 22;
-  headerRow.eachCell(cell => {
-    cell.font      = { bold: true, size: 11 };
-    cell.fill      = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9E1F2' } };
-    cell.alignment = { horizontal: 'center', vertical: 'middle' };
-    cell.border    = {
-      top:    { style: 'medium' },
-      left:   { style: 'medium' },
-      bottom: { style: 'medium' },
-      right:  { style: 'medium' },
-    };
-  });
-
-  if (reportRows.length === 0) {
-    const row = ws.addRow(['ไม่มีข้อมูลที่ขาดส่ง', '', '']);
-    ws.mergeCells(`A${row.number}:C${row.number}`);
-    row.getCell(1).alignment = { horizontal: 'center' };
-    row.getCell(1).font      = { italic: true, color: { argb: 'FF888888' } };
-  } else {
-    let prevMonth = null;
-    reportRows.forEach((r, idx) => {
-      // Only show month label on first row of each group
-      const monthCell = r.monthLabel === prevMonth ? '' : r.monthLabel;
-      prevMonth = r.monthLabel;
-
-      const row = ws.addRow({ month: monthCell, fullname: r.fullname, department: r.department });
-      row.height = 18;
-      row.eachCell({ includeEmpty: true }, cell => {
-        cell.border = {
-          top:    { style: 'thin' },
-          left:   { style: 'thin' },
-          bottom: { style: 'thin' },
-          right:  { style: 'thin' },
-        };
-        cell.alignment = { vertical: 'middle' };
-      });
-
-      // Shade alternating month groups for readability
-      const groupIdx = reportRows.filter((x, i) => i <= idx && x.monthLabel === r.monthLabel).length;
-      const isOddGroup = (reportRows.findIndex(x => x.monthLabel === r.monthLabel) % 2 === 0);
-      if (isOddGroup) {
-        row.getCell('month').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF2CC' } };
-      }
+    // Header row styling
+    const headerRow = ws.getRow(1);
+    headerRow.height = 22;
+    headerRow.eachCell(cell => {
+      cell.font      = { bold: true, size: 11 };
+      cell.fill      = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9E1F2' } };
+      cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      cell.border    = {
+        top:    { style: 'medium' },
+        left:   { style: 'medium' },
+        bottom: { style: 'medium' },
+        right:  { style: 'medium' },
+      };
     });
-  }
 
-  // Freeze header row
-  ws.views = [{ state: 'frozen', ySplit: 1 }];
+    if (group.rows.length === 0) {
+      const row = ws.addRow(['ไม่มีข้อมูลที่ขาดส่ง', '']);
+      ws.mergeCells(`A${row.number}:B${row.number}`);
+      row.getCell(1).alignment = { horizontal: 'center' };
+      row.getCell(1).font      = { italic: true, color: { argb: 'FF888888' } };
+    } else {
+      group.rows.forEach(r => {
+        const row = ws.addRow({ fullname: r.fullname, department: r.department });
+        row.height = 18;
+        row.eachCell({ includeEmpty: true }, cell => {
+          cell.border = {
+            top:    { style: 'thin' },
+            left:   { style: 'thin' },
+            bottom: { style: 'thin' },
+            right:  { style: 'thin' },
+          };
+          cell.alignment = { vertical: 'middle' };
+        });
+      });
+    }
+
+    // Freeze header row
+    ws.views = [{ state: 'frozen', ySplit: 1 }];
+  }
 
   const buf = await wb.xlsx.writeBuffer();
   return Buffer.from(buf);
@@ -318,7 +311,9 @@ async function main() {
   console.log('Months:', months.map(m => m.key).join(', '));
   console.log('');
 
-  const reportRows = []; // will be month-descending (months iterated newest first)
+  // monthGroups: one entry per incomplete month, in descending order
+  const monthGroups = [];
+  let totalMissing  = 0;
 
   for (const monthInfo of months) {
     const { key, beYear, month } = monthInfo;
@@ -336,9 +331,12 @@ async function main() {
     // Fetch Drive file names
     const driveNames = await getDriveNameSet(drive, monthInfo);
     if (driveNames === null) {
-      // Folder not found — treat all SB persons as missing
+      // Folder not found — all SB persons are missing
       log(`  [Drive] Folder not found — all ${sbPersons.length} persons have no file`);
-      sbPersons.forEach(p => reportRows.push({ monthLabel, fullname: p.fullname, department: p.department }));
+      const rows = [...sbPersons].sort((a, b) => a.fullname.localeCompare(b.fullname, 'th'));
+      monthGroups.push({ monthLabel, rows });
+      totalMissing += rows.length;
+      rows.forEach(p => log(`    • ${p.fullname} [${p.department}]`));
       continue;
     }
     log(`  [Drive] ${driveNames.size} files`);
@@ -351,20 +349,22 @@ async function main() {
       continue;
     }
 
-    log(`  ✗ ${missing.length} physician(s) have no Drive file:`);
-    missing.forEach(p => {
-      log(`    • ${p.fullname} [${p.department}]`);
-      reportRows.push({ monthLabel, fullname: p.fullname, department: p.department });
-    });
+    // Sort missing by name ascending (Thai locale)
+    const rows = missing.sort((a, b) => a.fullname.localeCompare(b.fullname, 'th'));
+    log(`  ✗ ${rows.length} physician(s) have no Drive file:`);
+    rows.forEach(p => log(`    • ${p.fullname} [${p.department}]`));
+    monthGroups.push({ monthLabel, rows });
+    totalMissing += rows.length;
   }
 
   console.log('\n══════════════════════════════════════════════════════');
-  console.log(` Total missing: ${reportRows.length} physician-month entries`);
+  console.log(` Incomplete months : ${monthGroups.length}`);
+  console.log(` Total missing     : ${totalMissing} physician-month entries`);
   console.log('');
 
   // Build and upload Excel
   log('[Excel] Building workbook…');
-  const buffer   = await buildExcel(reportRows);
+  const buffer   = await buildExcel(monthGroups);
   log('[Drive] Uploading report…');
   const uploaded = await uploadReport(drive, buffer);
   log(`\n✓ Report saved: ${uploaded.webViewLink}`);
