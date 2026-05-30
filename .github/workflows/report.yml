@@ -2,8 +2,8 @@ name: Missing Submission Report
 
 on:
   schedule:
-    # Runs every day at 01:00 UTC (08:00 Bangkok time, UTC+7)
-    - cron: '0 1 * * *'
+    # Runs every day at 02:00 UTC (09:00 Bangkok time, UTC+7)
+    - cron: '0 2 * * *'
   workflow_dispatch: # allow manual trigger from GitHub UI
 
 jobs:
