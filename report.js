@@ -287,20 +287,6 @@ async function buildExcel(monthGroups, runTime, allDepts) {
       cell.alignment = { vertical: 'middle', horizontal: cell.col === 1 ? 'left' : 'center' };
     });
 
-    // Footnote: completed depts merged across all columns, row immediately below รวม
-    if (completeDepts.length > 0) {
-      const totalColCount = 1 + monthGroups.length; // กลุ่มงาน + months
-      const lastColLetter = ws.getColumn(totalColCount).letter;
-      const footnoteRowNum = totalRow.number + 1;
-      ws.mergeCells(`A${footnoteRowNum}:${lastColLetter}${footnoteRowNum}`);
-      const fnCell = ws.getCell(`A${footnoteRowNum}`);
-      fnCell.value     = `กลุ่มงานที่ครบถ้วน :\n${completeDepts.map(d => `  • ${d}`).join('\n')}`;
-      fnCell.border    = FULL_THIN;
-      fnCell.alignment = { horizontal: 'left', vertical: 'top', wrapText: true };
-      fnCell.font      = { italic: true, size: 10, color: { argb: 'FF000000' } };
-      fnCell.fill      = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFFFF' } };
-      ws.getRow(footnoteRowNum).height = 18 * (completeDepts.length + 1);
-    }
 
     ws.views = [{ state: 'frozen', ySplit: 1 }];
   }
@@ -331,8 +317,8 @@ async function buildExcel(monthGroups, runTime, allDepts) {
     footnoteCell.value     = `ตรวจสอบเมื่อ : ${runTime}`;
     footnoteCell.border    = FULL_THIN;
     footnoteCell.alignment = { horizontal: 'center', vertical: 'middle' };
-    footnoteCell.font      = { italic: true, size: 10, color: { argb: 'FFFFFFFF' } };
-    footnoteCell.fill      = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF000000' } };
+    footnoteCell.font      = { italic: true, size: 10, color: { argb: 'FF000000' } };
+    footnoteCell.fill      = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFB8CCE4' } };
     footnoteRow.height     = 18;
 
     // Rows 3+: Data
