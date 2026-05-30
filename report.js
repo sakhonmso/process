@@ -300,8 +300,8 @@ async function buildExcel(monthGroups, runTime, allDepts) {
       fnCell.value     = `กลุ่มงานที่ครบถ้วน : ${completeDepts.join('  |  ')}`;
       fnCell.border    = FULL_THIN;
       fnCell.alignment = { horizontal: 'left', vertical: 'middle' };
-      fnCell.font      = { italic: true, size: 10, color: { argb: 'FFFFFFFF' } };
-      fnCell.fill      = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF000000' } };
+      fnCell.font      = { italic: true, size: 10, color: { argb: 'FF000000' } };
+      fnCell.fill      = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFFFF' } };
       ws.getRow(footnoteRowNum).height = 18;
     }
 
