@@ -317,7 +317,7 @@ async function buildExcel(monthGroups, runTime, allDepts) {
       { header: 'กลุ่มงาน',    key: 'department', width: 32 },
     ];
 
-    // Header row styling
+    // Row 1: Header styling
     const headerRow = ws.getRow(1);
     headerRow.height = 22;
     headerRow.eachCell(cell => {
@@ -327,6 +327,18 @@ async function buildExcel(monthGroups, runTime, allDepts) {
       cell.border    = FULL_MEDIUM;
     });
 
+    // Row 2: Footnote — merged A:B, black bg / white text, sticky with header
+    const footnoteRow = ws.addRow(['', '']);
+    ws.mergeCells(`A${footnoteRow.number}:B${footnoteRow.number}`);
+    const footnoteCell = ws.getCell(`A${footnoteRow.number}`);
+    footnoteCell.value     = `ตรวจสอบเมื่อ : ${runTime}`;
+    footnoteCell.border    = FULL_THIN;
+    footnoteCell.alignment = { horizontal: 'center', vertical: 'middle' };
+    footnoteCell.font      = { italic: true, size: 10, color: { argb: 'FFFFFFFF' } };
+    footnoteCell.fill      = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF000000' } };
+    footnoteRow.height     = 18;
+
+    // Rows 3+: Data
     if (group.rows.length === 0) {
       const row = ws.addRow(['ไม่มีข้อมูลที่ขาดส่ง', '']);
       ws.mergeCells(`A${row.number}:B${row.number}`);
@@ -343,19 +355,8 @@ async function buildExcel(monthGroups, runTime, allDepts) {
       });
     }
 
-    // Footnote: merged A:B, row immediately below last data row, black bg / white text
-    const lastDataRowNum = 1 + Math.max(group.rows.length, 1); // header + data (min 1)
-    const footnoteRowNum = lastDataRowNum + 1;
-    ws.mergeCells(`A${footnoteRowNum}:B${footnoteRowNum}`);
-    const footnoteCell = ws.getCell(`A${footnoteRowNum}`);
-    footnoteCell.value     = `ตรวจสอบเมื่อ : ${runTime}`;
-    footnoteCell.border    = FULL_THIN;
-    footnoteCell.alignment = { horizontal: 'center', vertical: 'middle' };
-    footnoteCell.font      = { italic: true, size: 10, color: { argb: 'FFFFFFFF' } };
-    footnoteCell.fill      = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF000000' } };
-    ws.getRow(footnoteRowNum).height = 18;
-
-    ws.views = [{ state: 'frozen', ySplit: 1 }];
+    // Freeze rows 1 (header) and 2 (footnote)
+    ws.views = [{ state: 'frozen', ySplit: 2 }];
   }
 
   const buf = await wb.xlsx.writeBuffer();
