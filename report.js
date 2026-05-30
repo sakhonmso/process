@@ -222,9 +222,10 @@ const FULL_MEDIUM   = { top: BORDER_MEDIUM, left: BORDER_MEDIUM, bottom: BORDER_
 //               - table: ชื่อ-นามสกุล | กลุ่มงาน
 //               - footnote merged row immediately below table
 // ═══════════════════════════════════════════════════════════════════
-async function buildExcel(monthGroups, runTime) {
+async function buildExcel(monthGroups, runTime, allDepts) {
   // monthGroups: [{ monthLabel, rows: [{ fullname, department }] }]
   // already in descending month order; rows sorted by Thai name asc
+  // allDepts: Set of every department seen in Supabase across all months
 
   const wb = new ExcelJS.Workbook();
   wb.creator  = 'Missing Submission Tracker';
@@ -235,10 +236,15 @@ async function buildExcel(monthGroups, runTime) {
   {
     const ws = wb.addWorksheet('ภาพรวม');
 
-    // Collect all departments across all months
-    const deptSet = new Set();
-    monthGroups.forEach(g => g.rows.forEach(r => deptSet.add(r.department)));
-    const depts = sortDepartments([...deptSet]);
+    // Departments with at least one missing physician (incomplete)
+    const incompleteDeptSet = new Set();
+    monthGroups.forEach(g => g.rows.forEach(r => incompleteDeptSet.add(r.department)));
+    const incompleteDepts = sortDepartments([...incompleteDeptSet]);
+
+    // Departments where all physicians submitted (complete) — from allDepts minus incomplete
+    const completeDepts = sortDepartments(
+      [...(allDepts ?? [])].filter(d => !incompleteDeptSet.has(d))
+    );
 
     // Column layout: กลุ่มงาน | month1 | month2 | ... | รวม
     ws.columns = [
@@ -257,21 +263,32 @@ async function buildExcel(monthGroups, runTime) {
       cell.border    = FULL_MEDIUM;
     });
 
-    // Dept rows
-    for (const dept of depts) {
-      const counts = monthGroups.map(g => g.rows.filter(r => r.department === dept).length);
-      const total  = counts.reduce((s, c) => s + c, 0);
+    // Helper: add a dept row with given style
+    const addDeptRow = (dept, disabled) => {
+      const counts  = monthGroups.map(g => g.rows.filter(r => r.department === dept).length);
+      const total   = counts.reduce((s, c) => s + c, 0);
       const rowData = { dept, total };
-      monthGroups.forEach((g, i) => { rowData[g.monthLabel] = counts[i]; });
+      monthGroups.forEach((g, i) => { rowData[g.monthLabel] = disabled ? '-' : counts[i]; });
+      if (disabled) rowData.total = '-';
       const row = ws.addRow(rowData);
       row.height = 18;
       row.eachCell({ includeEmpty: true }, cell => {
         cell.border    = FULL_THIN;
         cell.alignment = { vertical: 'middle', horizontal: cell.col === 1 ? 'left' : 'center' };
+        if (disabled) {
+          cell.font = { color: { argb: 'FFAAAAAa' }, italic: true };
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF5F5F5' } };
+        }
       });
-    }
+    };
 
-    // รวม row (totals)
+    // Incomplete dept rows (normal style)
+    for (const dept of incompleteDepts) addDeptRow(dept, false);
+
+    // Complete dept rows (disabled style)
+    for (const dept of completeDepts) addDeptRow(dept, true);
+
+    // รวม row (totals — based on incomplete depts only)
     const colTotals = monthGroups.map(g => g.rows.length);
     const grandTotal = colTotals.reduce((s, c) => s + c, 0);
     const totalRowData = { dept: 'รวม', total: grandTotal };
@@ -410,6 +427,7 @@ async function main() {
 
   // monthGroups: one entry per incomplete month, in descending order
   const monthGroups = [];
+  const allDeptSet  = new Set(); // all departments seen across all SB months
   let totalMissing  = 0;
 
   for (const monthInfo of months) {
@@ -424,6 +442,9 @@ async function main() {
       continue;
     }
     log(`  [SB] ${sbPersons.length} persons`);
+
+    // Accumulate all departments seen in Supabase
+    sbPersons.forEach(p => allDeptSet.add(p.department));
 
     // Fetch Drive file names
     const driveNames = await getDriveNameSet(drive, monthInfo);
@@ -462,7 +483,7 @@ async function main() {
   // Build and upload Excel
   const runTime = formatRunTime();
   log(`[Excel] Building workbook (ตรวจสอบเมื่อ: ${runTime})…`);
-  const buffer   = await buildExcel(monthGroups, runTime);
+  const buffer   = await buildExcel(monthGroups, runTime, allDeptSet);
   log('[Drive] Uploading report…');
   const uploaded = await uploadReport(drive, buffer);
   log(`\n✓ Report saved: ${uploaded.webViewLink}`);
