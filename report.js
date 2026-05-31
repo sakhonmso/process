@@ -22,6 +22,9 @@ const { google }       = require('googleapis');
 const { createClient } = require('@supabase/supabase-js');
 const ExcelJS          = require('exceljs');
 const { Readable }     = require('stream');
+const fs               = require('fs');
+const os               = require('os');
+const path             = require('path');
 
 // ═══════════════════════════════════════════════════════════════════
 //  Config
@@ -386,6 +389,165 @@ async function uploadReport(drive, buffer) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
+//  PNG — HTML template
+// ═══════════════════════════════════════════════════════════════════
+function buildHtml(monthGroups, runTime) {
+  const sections = monthGroups.map(group => {
+    const rows = group.rows.length === 0
+      ? `<tr><td colspan="2" style="text-align:center;color:#aaa;font-style:italic">ไม่มีข้อมูล</td></tr>`
+      : group.rows.map((r, i) => `
+          <tr style="background:${i % 2 === 1 ? '#f4f7fc' : '#fff'}">
+            <td>${r.fullname}</td>
+            <td>${r.department}</td>
+          </tr>`).join('');
+    return `
+      <div class="section">
+        <div class="month-bar">${group.monthLabel}
+          <span class="count">${group.rows.length} คน</span>
+        </div>
+        <table>
+          <thead><tr><th>ชื่อ-นามสกุล</th><th>กลุ่มงาน</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+  }).join('');
+
+  const emptyMsg = monthGroups.length === 0
+    ? `<div style="text-align:center;padding:60px;color:#aaa;font-size:16px">ไม่มีข้อมูลที่ขาดส่ง</div>`
+    : '';
+
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap');
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family: 'Sarabun', 'Noto Sans Thai', sans-serif;
+    background: #fff;
+    color: #2c3e50;
+    padding: 36px 40px;
+    width: 860px;
+    font-size: 13px;
+  }
+  h1 {
+    font-size: 19px;
+    font-weight: 700;
+    margin-bottom: 6px;
+    color: #1a2a3a;
+  }
+  .subtitle {
+    font-size: 12px;
+    color: #999;
+    font-style: italic;
+    margin-bottom: 28px;
+    padding-bottom: 14px;
+    border-bottom: 2px solid #D9E1F2;
+  }
+  .section { margin-bottom: 24px; }
+  .month-bar {
+    background: #B8CCE4;
+    color: #1a2a3a;
+    font-weight: 700;
+    font-size: 14px;
+    padding: 8px 14px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-radius: 4px 4px 0 0;
+  }
+  .count { font-size: 12px; font-weight: 400; color: #34495e; }
+  table { width: 100%; border-collapse: collapse; }
+  thead tr { background: #D9E1F2; }
+  th {
+    padding: 7px 12px;
+    text-align: left;
+    font-weight: 700;
+    font-size: 12px;
+    border: 1px solid #c5cfe0;
+    color: #34495e;
+  }
+  td {
+    padding: 6px 12px;
+    border: 1px solid #dde3ee;
+    vertical-align: middle;
+    line-height: 1.4;
+  }
+  .timestamp {
+    margin-top: 28px;
+    font-size: 11px;
+    color: #aaa;
+    text-align: right;
+    font-style: italic;
+  }
+</style>
+</head>
+<body>
+  <h1>รายชื่อแพทย์ค้างส่ง P4P</h1>
+  <div class="subtitle">ตรวจสอบเมื่อ : ${runTime}</div>
+  ${emptyMsg}
+  ${sections}
+</body>
+</html>`;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  PNG — render via Puppeteer
+// ═══════════════════════════════════════════════════════════════════
+async function renderPng(html) {
+  const puppeteer = require('puppeteer');
+  const browser   = await puppeteer.launch({
+    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+  });
+  try {
+    const page = await browser.newPage();
+    await page.setViewport({ width: 860, height: 800 });
+    await page.setContent(html, { waitUntil: 'networkidle0', timeout: 30000 });
+    const buffer = await page.screenshot({ fullPage: true, type: 'png' });
+    return Buffer.from(buffer);
+  } finally {
+    await browser.close();
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  PNG — upload / overwrite in Drive
+// ═══════════════════════════════════════════════════════════════════
+async function uploadPng(drive, buffer) {
+  const mime     = 'image/png';
+  const fileName = CONFIG.reportFileName.replace(/\.xlsx$/i, '.png');
+  const folderId = CONFIG.reportFolderId;
+
+  const existing = await driveListAll(drive, {
+    q: `'${folderId}' in parents and name='${fileName}' and trashed=false`,
+    fields: 'nextPageToken, files(id, name)',
+    pageSize: 10,
+  });
+
+  if (existing.length > 0) {
+    const [first, ...dupes] = existing;
+    for (const d of dupes) await withRetry(() => drive.files.delete({ fileId: d.id }));
+    log(`  [Drive] Overwriting "${fileName}" (id: ${first.id})`);
+    const res = await withRetry(() => drive.files.update({
+      fileId: first.id,
+      requestBody: { name: fileName },
+      media: { mimeType: mime, body: Readable.from([buffer]) },
+      fields: 'id, name, webViewLink',
+    }));
+    return res.data;
+  }
+
+  log(`  [Drive] Creating "${fileName}"`);
+  const res = await withRetry(() => drive.files.create({
+    requestBody: { name: fileName, parents: [folderId], mimeType: mime },
+    media: { mimeType: mime, body: Readable.from([buffer]) },
+    fields: 'id, name, webViewLink',
+  }));
+  return res.data;
+}
+
+// ═══════════════════════════════════════════════════════════════════
 //  Main
 // ═══════════════════════════════════════════════════════════════════
 async function main() {
@@ -474,7 +636,15 @@ async function main() {
   const buffer   = await buildExcel(monthGroups, runTime, allDeptSet);
   log('[Drive] Uploading report…');
   const uploaded = await uploadReport(drive, buffer);
-  log(`\n✓ Report saved: ${uploaded.webViewLink}`);
+  log(`\n✓ Excel saved : ${uploaded.webViewLink}`);
+
+  // Build and upload PNG
+  log('[PNG] Rendering via Puppeteer…');
+  const html          = buildHtml(monthGroups, runTime);
+  const pngBuffer     = await renderPng(html);
+  log('[Drive] Uploading PNG…');
+  const uploadedPng   = await uploadPng(drive, pngBuffer);
+  log(`✓ PNG saved   : ${uploadedPng.webViewLink}`);
 }
 
 main().catch(err => {
