@@ -392,28 +392,42 @@ async function uploadReport(drive, buffer) {
 //  PNG — HTML template
 // ═══════════════════════════════════════════════════════════════════
 function buildHtml(monthGroups, runTime) {
+  const grandTotal = monthGroups.reduce((s, g) => s + g.rows.length, 0);
+
   const sections = monthGroups.map(group => {
     const rows = group.rows.length === 0
-      ? `<tr><td colspan="2" style="text-align:center;color:#aaa;font-style:italic">ไม่มีข้อมูล</td></tr>`
+      ? `<tr><td class="no-data" colspan="3">ไม่มีข้อมูล</td></tr>`
       : group.rows.map((r, i) => `
-          <tr style="background:${i % 2 === 1 ? '#f4f7fc' : '#fff'}">
+          <tr class="${i % 2 === 1 ? 'alt' : ''}">
+            <td class="num">${i + 1}</td>
             <td>${r.fullname}</td>
-            <td>${r.department}</td>
+            <td class="dept">${r.department}</td>
           </tr>`).join('');
     return `
       <div class="section">
-        <div class="month-bar">${group.monthLabel}
-          <span class="count">${group.rows.length} คน</span>
+        <div class="month-bar">
+          <span class="month-label">${group.monthLabel}</span>
+          <span class="month-count">${group.rows.length} คน</span>
         </div>
         <table>
-          <thead><tr><th>ชื่อ-นามสกุล</th><th>กลุ่มงาน</th></tr></thead>
+          <thead>
+            <tr>
+              <th class="th-num">#</th>
+              <th>ชื่อ-นามสกุล</th>
+              <th class="th-dept">กลุ่มงาน</th>
+            </tr>
+          </thead>
           <tbody>${rows}</tbody>
         </table>
       </div>`;
   }).join('');
 
   const emptyMsg = monthGroups.length === 0
-    ? `<div style="text-align:center;padding:60px;color:#aaa;font-size:16px">ไม่มีข้อมูลที่ขาดส่ง</div>`
+    ? `<div class="empty">ไม่มีข้อมูลที่ขาดส่งในช่วง 6 เดือนที่ผ่านมา</div>`
+    : '';
+
+  const totalBar = monthGroups.length > 0
+    ? `<div class="total-bar">รวมทั้งหมด <strong>${grandTotal} คน</strong> จาก ${monthGroups.length} เดือน</div>`
     : '';
 
   return `<!DOCTYPE html>
@@ -421,73 +435,143 @@ function buildHtml(monthGroups, runTime) {
 <head>
 <meta charset="UTF-8">
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap');
-  * { margin:0; padding:0; box-sizing:border-box; }
+  @import url('https://fonts.googleapis.com/css2?family=Sarabun:ital,wght@0,400;0,600;0,700;1,400&display=swap');
+  * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
     font-family: 'Sarabun', 'Noto Sans Thai', sans-serif;
-    background: #fff;
-    color: #2c3e50;
-    padding: 36px 40px;
-    width: 860px;
+    background: #f0f4f9;
+    color: #1e2d3d;
+    width: 960px;
+    font-size: 15px;
+    line-height: 1.5;
+  }
+
+  /* ── Header bar ── */
+  .page-header {
+    background: #1e3a5f;
+    color: #fff;
+    padding: 22px 36px 18px;
+  }
+  .page-header h1 {
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+    margin-bottom: 4px;
+  }
+  .page-header .tagline {
     font-size: 13px;
-  }
-  h1 {
-    font-size: 19px;
-    font-weight: 700;
-    margin-bottom: 6px;
-    color: #1a2a3a;
-  }
-  .subtitle {
-    font-size: 12px;
-    color: #999;
+    color: #a8c4e0;
     font-style: italic;
-    margin-bottom: 28px;
-    padding-bottom: 14px;
-    border-bottom: 2px solid #D9E1F2;
   }
-  .section { margin-bottom: 24px; }
+
+  /* ── Content area ── */
+  .content { padding: 28px 36px 8px; }
+
+  /* ── Section ── */
+  .section { margin-bottom: 28px; }
+
+  /* ── Month bar ── */
   .month-bar {
-    background: #B8CCE4;
-    color: #1a2a3a;
-    font-weight: 700;
-    font-size: 14px;
-    padding: 8px 14px;
+    background: #4472C4;
+    color: #fff;
     display: flex;
     justify-content: space-between;
     align-items: center;
-    border-radius: 4px 4px 0 0;
+    padding: 10px 16px;
+    border-radius: 6px 6px 0 0;
   }
-  .count { font-size: 12px; font-weight: 400; color: #34495e; }
-  table { width: 100%; border-collapse: collapse; }
+  .month-label { font-size: 16px; font-weight: 700; }
+  .month-count {
+    font-size: 13px;
+    background: rgba(255,255,255,0.2);
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-weight: 600;
+  }
+
+  /* ── Table ── */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    background: #fff;
+    border-radius: 0 0 6px 6px;
+    overflow: hidden;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+  }
   thead tr { background: #D9E1F2; }
   th {
-    padding: 7px 12px;
+    padding: 9px 14px;
     text-align: left;
     font-weight: 700;
-    font-size: 12px;
-    border: 1px solid #c5cfe0;
-    color: #34495e;
+    font-size: 13px;
+    color: #2c3e50;
+    border-bottom: 2px solid #b4c6e0;
   }
   td {
-    padding: 6px 12px;
-    border: 1px solid #dde3ee;
+    padding: 8px 14px;
+    border-bottom: 1px solid #e8edf5;
     vertical-align: middle;
-    line-height: 1.4;
   }
-  .timestamp {
-    margin-top: 28px;
-    font-size: 11px;
-    color: #aaa;
-    text-align: right;
+  tr.alt { background: #EBF1FB; }
+  tr:last-child td { border-bottom: none; }
+  .num    { color: #999; font-size: 12px; text-align: center; width: 36px; }
+  .dept   { color: #4472C4; font-size: 13px; font-weight: 600; }
+  .th-num { width: 36px; text-align: center; }
+  .th-dept { width: 220px; }
+  .no-data {
+    text-align: center;
+    color: #bbb;
     font-style: italic;
+    padding: 16px;
+  }
+
+  /* ── Total bar ── */
+  .total-bar {
+    background: #fff;
+    border: 1px solid #d0daea;
+    border-radius: 6px;
+    padding: 11px 18px;
+    font-size: 14px;
+    color: #34495e;
+    margin-bottom: 28px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+  }
+  .total-bar strong { color: #c0392b; font-size: 16px; }
+
+  /* ── Empty state ── */
+  .empty {
+    text-align: center;
+    padding: 80px 40px;
+    color: #aaa;
+    font-size: 16px;
+    font-style: italic;
+  }
+
+  /* ── Footer ── */
+  .footer {
+    background: #1e3a5f;
+    color: #a8c4e0;
+    font-size: 12px;
+    font-style: italic;
+    padding: 12px 36px;
+    text-align: right;
+    letter-spacing: 0.2px;
   }
 </style>
 </head>
 <body>
-  <h1>รายชื่อแพทย์ค้างส่ง P4P</h1>
-  <div class="subtitle">ตรวจสอบเมื่อ : ${runTime}</div>
-  ${emptyMsg}
-  ${sections}
+  <div class="page-header">
+    <h1>รายชื่อแพทย์ค้างส่ง P4P</h1>
+    <div class="tagline">รายงานแพทย์ที่ยังไม่ส่งไฟล์ Excel ในระบบ — ข้อมูลอัปเดตอัตโนมัติทุกวัน</div>
+  </div>
+
+  <div class="content">
+    ${totalBar}
+    ${emptyMsg}
+    ${sections}
+  </div>
+
+  <div class="footer">ตรวจสอบเมื่อ : ${runTime}</div>
 </body>
 </html>`;
 }
@@ -502,7 +586,7 @@ async function renderPng(html) {
   });
   try {
     const page = await browser.newPage();
-    await page.setViewport({ width: 860, height: 800 });
+    await page.setViewport({ width: 960, height: 800, deviceScaleFactor: 2 });
     await page.setContent(html, { waitUntil: 'networkidle0', timeout: 30000 });
     const buffer = await page.screenshot({ fullPage: true, type: 'png' });
     return Buffer.from(buffer);
