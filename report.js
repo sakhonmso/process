@@ -590,8 +590,9 @@ async function renderPng(html) {
     const page = await browser.newPage();
     await page.setViewport({ width: 1100, height: 800, deviceScaleFactor: 3 });
     await page.setContent(html, { waitUntil: 'networkidle0', timeout: 30000 });
-    const buffer = await page.screenshot({ fullPage: true, type: 'png' });
-    return Buffer.from(buffer);
+    // screenshot() returns Uint8Array in Puppeteer v22+ — convert explicitly
+    const raw = await page.screenshot({ fullPage: true, type: 'png' });
+    return Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
   } finally {
     await browser.close();
   }
@@ -605,32 +606,41 @@ async function uploadPng(drive, buffer) {
   const fileName = CONFIG.reportFileName.replace(/\.xlsx$/i, '.png');
   const folderId = CONFIG.reportFolderId;
 
-  const existing = await driveListAll(drive, {
-    q: `'${folderId}' in parents and name='${fileName}' and trashed=false`,
-    fields: 'nextPageToken, files(id, name)',
-    pageSize: 10,
-  });
+  // Write to temp file — fs.createReadStream is more reliable than
+  // Readable.from() for large binary uploads via googleapis
+  const tmpPath = path.join(os.tmpdir(), `report_png_${Date.now()}.png`);
+  fs.writeFileSync(tmpPath, buffer);
 
-  if (existing.length > 0) {
-    const [first, ...dupes] = existing;
-    for (const d of dupes) await withRetry(() => drive.files.delete({ fileId: d.id }));
-    log(`  [Drive] Overwriting "${fileName}" (id: ${first.id})`);
-    const res = await withRetry(() => drive.files.update({
-      fileId: first.id,
-      requestBody: { name: fileName },
-      media: { mimeType: mime, body: Readable.from([buffer]) },
+  try {
+    const existing = await driveListAll(drive, {
+      q: `'${folderId}' in parents and name='${fileName}' and trashed=false`,
+      fields: 'nextPageToken, files(id, name)',
+      pageSize: 10,
+    });
+
+    if (existing.length > 0) {
+      const [first, ...dupes] = existing;
+      for (const d of dupes) await withRetry(() => drive.files.delete({ fileId: d.id }));
+      log(`  [Drive] Overwriting "${fileName}" (id: ${first.id})`);
+      const res = await withRetry(() => drive.files.update({
+        fileId: first.id,
+        requestBody: { name: fileName },
+        media: { mimeType: mime, body: fs.createReadStream(tmpPath) },
+        fields: 'id, name, webViewLink',
+      }));
+      return res.data;
+    }
+
+    log(`  [Drive] Creating "${fileName}"`);
+    const res = await withRetry(() => drive.files.create({
+      requestBody: { name: fileName, parents: [folderId], mimeType: mime },
+      media: { mimeType: mime, body: fs.createReadStream(tmpPath) },
       fields: 'id, name, webViewLink',
     }));
     return res.data;
+  } finally {
+    fs.unlinkSync(tmpPath);
   }
-
-  log(`  [Drive] Creating "${fileName}"`);
-  const res = await withRetry(() => drive.files.create({
-    requestBody: { name: fileName, parents: [folderId], mimeType: mime },
-    media: { mimeType: mime, body: Readable.from([buffer]) },
-    fields: 'id, name, webViewLink',
-  }));
-  return res.data;
 }
 
 // ═══════════════════════════════════════════════════════════════════
