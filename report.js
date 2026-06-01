@@ -435,14 +435,14 @@ function buildHtml(monthGroups, runTime) {
 <head>
 <meta charset="UTF-8">
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Sarabun:ital,wght@0,400;0,600;0,700;1,400&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=Prompt:ital,wght@0,400;0,600;0,700;1,400&display=swap');
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
-    font-family: 'Sarabun', 'Noto Sans Thai', sans-serif;
+    font-family: 'Prompt', 'Noto Sans Thai', sans-serif;
     background: #f0f4f9;
     color: #1e2d3d;
-    width: 960px;
-    font-size: 15px;
+    width: 1100px;
+    font-size: 28px;
     line-height: 1.5;
   }
 
@@ -450,25 +450,25 @@ function buildHtml(monthGroups, runTime) {
   .page-header {
     background: #1e3a5f;
     color: #fff;
-    padding: 22px 36px 18px;
+    padding: 30px 44px 24px;
   }
   .page-header h1 {
-    font-size: 22px;
+    font-size: 40px;
     font-weight: 700;
     letter-spacing: 0.3px;
-    margin-bottom: 4px;
+    margin-bottom: 6px;
   }
   .page-header .tagline {
-    font-size: 13px;
+    font-size: 24px;
     color: #a8c4e0;
     font-style: italic;
   }
 
   /* ── Content area ── */
-  .content { padding: 28px 36px 8px; }
+  .content { padding: 32px 44px 12px; }
 
   /* ── Section ── */
-  .section { margin-bottom: 28px; }
+  .section { margin-bottom: 36px; }
 
   /* ── Month bar ── */
   .month-bar {
@@ -477,15 +477,15 @@ function buildHtml(monthGroups, runTime) {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 10px 16px;
+    padding: 14px 22px;
     border-radius: 6px 6px 0 0;
   }
-  .month-label { font-size: 16px; font-weight: 700; }
+  .month-label { font-size: 30px; font-weight: 700; }
   .month-count {
-    font-size: 13px;
+    font-size: 24px;
     background: rgba(255,255,255,0.2);
-    padding: 2px 10px;
-    border-radius: 12px;
+    padding: 4px 16px;
+    border-radius: 14px;
     font-weight: 600;
   }
 
@@ -496,33 +496,35 @@ function buildHtml(monthGroups, runTime) {
     background: #fff;
     border-radius: 0 0 6px 6px;
     overflow: hidden;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+    box-shadow: 0 2px 6px rgba(0,0,0,0.08);
   }
   thead tr { background: #D9E1F2; }
   th {
-    padding: 9px 14px;
+    padding: 14px 20px;
     text-align: left;
     font-weight: 700;
-    font-size: 13px;
+    font-size: 26px;
     color: #2c3e50;
-    border-bottom: 2px solid #b4c6e0;
+    border-bottom: 3px solid #b4c6e0;
   }
   td {
-    padding: 8px 14px;
+    padding: 12px 20px;
     border-bottom: 1px solid #e8edf5;
     vertical-align: middle;
+    font-size: 28px;
   }
   tr.alt { background: #EBF1FB; }
   tr:last-child td { border-bottom: none; }
-  .num    { color: #999; font-size: 12px; text-align: center; width: 36px; }
-  .dept   { color: #4472C4; font-size: 13px; font-weight: 600; }
-  .th-num { width: 36px; text-align: center; }
-  .th-dept { width: 220px; }
+  .num    { color: #999; font-size: 22px; text-align: center; width: 56px; }
+  .dept   { color: #4472C4; font-size: 26px; font-weight: 600; }
+  .th-num { width: 56px; text-align: center; }
+  .th-dept { width: 280px; }
   .no-data {
     text-align: center;
     color: #bbb;
     font-style: italic;
-    padding: 16px;
+    padding: 24px;
+    font-size: 26px;
   }
 
   /* ── Total bar ── */
@@ -530,20 +532,20 @@ function buildHtml(monthGroups, runTime) {
     background: #fff;
     border: 1px solid #d0daea;
     border-radius: 6px;
-    padding: 11px 18px;
-    font-size: 14px;
+    padding: 14px 22px;
+    font-size: 26px;
     color: #34495e;
-    margin-bottom: 28px;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    margin-bottom: 32px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
   }
-  .total-bar strong { color: #c0392b; font-size: 16px; }
+  .total-bar strong { color: #c0392b; font-size: 30px; }
 
   /* ── Empty state ── */
   .empty {
     text-align: center;
-    padding: 80px 40px;
+    padding: 100px 40px;
     color: #aaa;
-    font-size: 16px;
+    font-size: 28px;
     font-style: italic;
   }
 
@@ -551,9 +553,9 @@ function buildHtml(monthGroups, runTime) {
   .footer {
     background: #1e3a5f;
     color: #a8c4e0;
-    font-size: 12px;
+    font-size: 22px;
     font-style: italic;
-    padding: 12px 36px;
+    padding: 16px 44px;
     text-align: right;
     letter-spacing: 0.2px;
   }
@@ -586,7 +588,7 @@ async function renderPng(html) {
   });
   try {
     const page = await browser.newPage();
-    await page.setViewport({ width: 960, height: 800, deviceScaleFactor: 2 });
+    await page.setViewport({ width: 1100, height: 800, deviceScaleFactor: 3 });
     await page.setContent(html, { waitUntil: 'networkidle0', timeout: 30000 });
     const buffer = await page.screenshot({ fullPage: true, type: 'png' });
     return Buffer.from(buffer);
