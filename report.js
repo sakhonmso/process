@@ -687,6 +687,19 @@ async function main() {
   const uploaded = await uploadReport(drive, buffer);
   log(`\n✓ Excel saved : ${uploaded.webViewLink}`);
 
+  // Remove all existing PNG files in report folder before uploading new ones
+  log('\n[PNG] Clearing existing PNG files in report folder…');
+  const existingPngs = await driveListAll(drive, {
+    q: `'${CONFIG.reportFolderId}' in parents and mimeType='image/png' and trashed=false`,
+    fields: 'nextPageToken, files(id, name)',
+    pageSize: 100,
+  });
+  for (const f of existingPngs) {
+    await withRetry(() => drive.files.delete({ fileId: f.id }));
+    log(`  ✗ Deleted: ${f.name}`);
+  }
+  if (existingPngs.length === 0) log('  (none found)');
+
   // Build and upload one PNG per incomplete month
   log('\n[PNG] Rendering per-month images via Puppeteer…');
   for (const group of monthGroups) {
