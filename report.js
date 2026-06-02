@@ -391,44 +391,18 @@ async function uploadReport(drive, buffer) {
 // ═══════════════════════════════════════════════════════════════════
 //  PNG — HTML template
 // ═══════════════════════════════════════════════════════════════════
-function buildHtml(monthGroups, runTime) {
-  const grandTotal = monthGroups.reduce((s, g) => s + g.rows.length, 0);
+// One PNG per month — receives a single group
+function buildHtml(group, runTime) {
+  const rows = group.rows.length === 0
+    ? `<tr><td class="no-data" colspan="3">ไม่มีข้อมูล</td></tr>`
+    : group.rows.map((r, i) => `
+        <tr class="${i % 2 === 1 ? 'alt' : ''}">
+          <td class="num">${i + 1}</td>
+          <td class="name">${r.fullname}</td>
+          <td class="dept">${r.department}</td>
+        </tr>`).join('');
 
-  const sections = monthGroups.map(group => {
-    const rows = group.rows.length === 0
-      ? `<tr><td class="no-data" colspan="3">ไม่มีข้อมูล</td></tr>`
-      : group.rows.map((r, i) => `
-          <tr class="${i % 2 === 1 ? 'alt' : ''}">
-            <td class="num">${i + 1}</td>
-            <td>${r.fullname}</td>
-            <td class="dept">${r.department}</td>
-          </tr>`).join('');
-    return `
-      <div class="section">
-        <div class="month-bar">
-          <span class="month-label">${group.monthLabel}</span>
-          <span class="month-count">${group.rows.length} คน</span>
-        </div>
-        <table>
-          <thead>
-            <tr>
-              <th class="th-num">#</th>
-              <th>ชื่อ-นามสกุล</th>
-              <th class="th-dept">กลุ่มงาน</th>
-            </tr>
-          </thead>
-          <tbody>${rows}</tbody>
-        </table>
-      </div>`;
-  }).join('');
-
-  const emptyMsg = monthGroups.length === 0
-    ? `<div class="empty">ไม่มีข้อมูลที่ขาดส่งในช่วง 6 เดือนที่ผ่านมา</div>`
-    : '';
-
-  const totalBar = monthGroups.length > 0
-    ? `<div class="total-bar">รวมทั้งหมด <strong>${grandTotal} คน</strong> จาก ${monthGroups.length} เดือน</div>`
-    : '';
+  const emptyMsg = '';
 
   return `<!DOCTYPE html>
 <html>
@@ -441,7 +415,7 @@ function buildHtml(monthGroups, runTime) {
     font-family: 'Prompt', 'Noto Sans Thai', sans-serif;
     background: #f0f4f9;
     color: #1e2d3d;
-    width: 1100px;
+    width: 960px;
     font-size: 28px;
     line-height: 1.5;
   }
@@ -450,25 +424,17 @@ function buildHtml(monthGroups, runTime) {
   .page-header {
     background: #1e3a5f;
     color: #fff;
-    padding: 30px 44px 24px;
+    padding: 28px 40px 22px;
   }
-  .page-header h1 {
-    font-size: 40px;
-    font-weight: 700;
-    letter-spacing: 0.3px;
-    margin-bottom: 6px;
-  }
-  .page-header .tagline {
-    font-size: 24px;
+  .page-header h1 { font-size: 38px; font-weight: 700; margin-bottom: 4px; }
+  .page-header .month-tag {
+    font-size: 26px;
     color: #a8c4e0;
-    font-style: italic;
+    font-weight: 600;
   }
 
   /* ── Content area ── */
-  .content { padding: 32px 44px 12px; }
-
-  /* ── Section ── */
-  .section { margin-bottom: 36px; }
+  .content { padding: 28px 40px 12px; }
 
   /* ── Month bar ── */
   .month-bar {
@@ -477,14 +443,14 @@ function buildHtml(monthGroups, runTime) {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 14px 22px;
+    padding: 12px 20px;
     border-radius: 6px 6px 0 0;
   }
-  .month-label { font-size: 30px; font-weight: 700; }
+  .month-label { font-size: 28px; font-weight: 700; }
   .month-count {
-    font-size: 24px;
+    font-size: 23px;
     background: rgba(255,255,255,0.2);
-    padding: 4px 16px;
+    padding: 3px 14px;
     border-radius: 14px;
     font-weight: 600;
   }
@@ -497,80 +463,67 @@ function buildHtml(monthGroups, runTime) {
     border-radius: 0 0 6px 6px;
     overflow: hidden;
     box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+    table-layout: auto;
   }
   thead tr { background: #D9E1F2; }
   th {
-    padding: 14px 20px;
+    padding: 12px 18px;
     text-align: left;
     font-weight: 700;
-    font-size: 26px;
+    font-size: 25px;
     color: #2c3e50;
     border-bottom: 3px solid #b4c6e0;
+    white-space: nowrap;
   }
   td {
-    padding: 12px 20px;
+    padding: 11px 18px;
     border-bottom: 1px solid #e8edf5;
     vertical-align: middle;
-    font-size: 28px;
+    font-size: 27px;
   }
   tr.alt { background: #EBF1FB; }
   tr:last-child td { border-bottom: none; }
-  .num    { color: #999; font-size: 22px; text-align: center; width: 56px; }
-  .dept   { color: #4472C4; font-size: 26px; font-weight: 600; }
-  .th-num { width: 56px; text-align: center; }
-  .th-dept { width: 280px; }
+  .num    { color: #aaa; font-size: 21px; text-align: center; width: 50px; white-space: nowrap; }
+  .th-num { width: 50px; text-align: center; }
+  .name   { }
+  .dept   { color: #4472C4; font-weight: 600; white-space: nowrap; }
   .no-data {
-    text-align: center;
-    color: #bbb;
-    font-style: italic;
-    padding: 24px;
-    font-size: 26px;
-  }
-
-  /* ── Total bar ── */
-  .total-bar {
-    background: #fff;
-    border: 1px solid #d0daea;
-    border-radius: 6px;
-    padding: 14px 22px;
-    font-size: 26px;
-    color: #34495e;
-    margin-bottom: 32px;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
-  }
-  .total-bar strong { color: #c0392b; font-size: 30px; }
-
-  /* ── Empty state ── */
-  .empty {
-    text-align: center;
-    padding: 100px 40px;
-    color: #aaa;
-    font-size: 28px;
-    font-style: italic;
+    text-align: center; color: #bbb; font-style: italic;
+    padding: 22px; font-size: 25px;
   }
 
   /* ── Footer ── */
   .footer {
     background: #1e3a5f;
     color: #a8c4e0;
-    font-size: 22px;
+    font-size: 21px;
     font-style: italic;
-    padding: 16px 44px;
+    padding: 14px 40px;
     text-align: right;
-    letter-spacing: 0.2px;
   }
 </style>
 </head>
 <body>
   <div class="page-header">
     <h1>รายชื่อแพทย์ค้างส่ง P4P</h1>
-    <div class="tagline">รายงานแพทย์ที่ยังไม่ส่งไฟล์ Excel ในระบบ — ข้อมูลอัปเดตอัตโนมัติทุกวัน</div>
+    <div class="month-tag">${group.monthLabel}</div>
   </div>
 
   <div class="content">
-    ${totalBar}
-    ${emptyMsg}
-    ${sections}
+    <div class="month-bar">
+      <span class="month-label">แพทย์ที่ยังไม่ส่งไฟล์</span>
+      <span class="month-count">${group.rows.length} คน</span>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th class="th-num">#</th>
+          <th>ชื่อ-นามสกุล</th>
+          <th>กลุ่มงาน</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
   </div>
 
   <div class="footer">ตรวจสอบเมื่อ : ${runTime}</div>
@@ -588,7 +541,7 @@ async function renderPng(html) {
   });
   try {
     const page = await browser.newPage();
-    await page.setViewport({ width: 1100, height: 800, deviceScaleFactor: 3 });
+    await page.setViewport({ width: 960, height: 800, deviceScaleFactor: 2 }); // 1920px wide = Full HD
     await page.setContent(html, { waitUntil: 'networkidle0', timeout: 30000 });
     // screenshot() returns Uint8Array in Puppeteer v22+ — convert explicitly
     const raw = await page.screenshot({ fullPage: true, type: 'png' });
@@ -601,9 +554,8 @@ async function renderPng(html) {
 // ═══════════════════════════════════════════════════════════════════
 //  PNG — upload / overwrite in Drive
 // ═══════════════════════════════════════════════════════════════════
-async function uploadPng(drive, buffer) {
+async function uploadPng(drive, buffer, fileName) {
   const mime     = 'image/png';
-  const fileName = CONFIG.reportFileName.replace(/\.xlsx$/i, '.png');
   const folderId = CONFIG.reportFolderId;
 
   // Write to temp file — fs.createReadStream is more reliable than
@@ -678,7 +630,8 @@ async function main() {
 
   for (const monthInfo of months) {
     const { key, beYear, month } = monthInfo;
-    const monthLabel = `${THAI_MONTHS[month]} ${beYear}`;
+    const monthLabel    = `${THAI_MONTHS[month]} ${beYear}`;
+    const abbMonthLabel = `${THAI_MONTH_ABBR[month]} ${String(beYear).slice(-2)}`;
     log(`\n── ${key} (${monthLabel})`);
 
     // Fetch Supabase persons
@@ -698,7 +651,7 @@ async function main() {
       // Folder not found — all SB persons are missing
       log(`  [Drive] Folder not found — all ${sbPersons.length} persons have no file`);
       const rows = [...sbPersons].sort((a, b) => a.fullname.localeCompare(b.fullname, 'th'));
-      monthGroups.push({ monthLabel, rows });
+      monthGroups.push({ monthLabel, abbMonthLabel, rows });
       totalMissing += rows.length;
       rows.forEach(p => log(`    • ${p.fullname} [${p.department}]`));
       continue;
@@ -717,7 +670,7 @@ async function main() {
     const rows = missing.sort((a, b) => a.fullname.localeCompare(b.fullname, 'th'));
     log(`  ✗ ${rows.length} physician(s) have no Drive file:`);
     rows.forEach(p => log(`    • ${p.fullname} [${p.department}]`));
-    monthGroups.push({ monthLabel, rows });
+    monthGroups.push({ monthLabel, abbMonthLabel, rows });
     totalMissing += rows.length;
   }
 
@@ -734,13 +687,16 @@ async function main() {
   const uploaded = await uploadReport(drive, buffer);
   log(`\n✓ Excel saved : ${uploaded.webViewLink}`);
 
-  // Build and upload PNG
-  log('[PNG] Rendering via Puppeteer…');
-  const html          = buildHtml(monthGroups, runTime);
-  const pngBuffer     = await renderPng(html);
-  log('[Drive] Uploading PNG…');
-  const uploadedPng   = await uploadPng(drive, pngBuffer);
-  log(`✓ PNG saved   : ${uploadedPng.webViewLink}`);
+  // Build and upload one PNG per incomplete month
+  log('\n[PNG] Rendering per-month images via Puppeteer…');
+  for (const group of monthGroups) {
+    const pngFileName = `ค้างส่ง ${group.abbMonthLabel}.png`;
+    log(`  ↳ ${pngFileName}`);
+    const html      = buildHtml(group, runTime);
+    const pngBuffer = await renderPng(html);
+    const up        = await uploadPng(drive, pngBuffer, pngFileName);
+    log(`    ✓ ${up.webViewLink}`);
+  }
 }
 
 main().catch(err => {
