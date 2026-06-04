@@ -97,6 +97,9 @@ const MANAGEMENT_DATA = [
   { name: 'นฤวัต เกสรสุคนธ์',            remark: 'หัวหน้ากลุ่มงาน',     amount: 1000 },
   { name: 'พยุงศักดิ์ ศักดาภิพาณิชย์',   remark: 'ประธาน PCT ENT',     amount:  800 },
   { name: 'อัญชลี ชุ่มแจ่ม',             remark: 'ผู้ช่วยผู้อำนวยการ',   amount: 3000 },
+  { name: 'สงกรานต์ ชุนหวัฒนา',          remark: 'หัวหน้ากลุ่มงาน',     amount: 1000 },
+  { name: 'โอภาส ไชยมหาพฤกษ์',           remark: 'หัวหน้ากลุ่มงาน',     amount: 1000 },
+  { name: 'เกษมศักดิ์ จึงจรูญ',           remark: 'หัวหน้ากลุ่มงาน',     amount: 1000 },
 ];
 
 // O(1) lookup: "firstname lastname" → { remark, amount }
@@ -117,6 +120,9 @@ const DEPT_HEAD_SET = new Set([
   'ธิรัญฎา สุทธิพงศ์',
   'ศิรดา แสงไพบูลย์',
   'อภิสรา กูลวงศ์ธนโรจน์',
+  'สงกรานต์ ชุนหวัฒนา',
+  'โอภาส ไชยมหาพฤกษ์',
+  'เกษมศักดิ์ จึงจรูญ',
 ].map(normaliseName));
 
 /** Return management entry for a person, or null */
