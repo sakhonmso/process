@@ -651,7 +651,7 @@ async function main() {
       // Folder not found — all SB persons are missing
       log(`  [Drive] Folder not found — all ${sbPersons.length} persons have no file`);
       const rows = [...sbPersons].sort((a, b) => a.fullname.localeCompare(b.fullname, 'th'));
-      monthGroups.push({ monthLabel, abbMonthLabel, rows });
+      monthGroups.push({ monthLabel, abbMonthLabel, key, rows });
       totalMissing += rows.length;
       rows.forEach(p => log(`    • ${p.fullname} [${p.department}]`));
       continue;
@@ -670,7 +670,7 @@ async function main() {
     const rows = missing.sort((a, b) => a.fullname.localeCompare(b.fullname, 'th'));
     log(`  ✗ ${rows.length} physician(s) have no Drive file:`);
     rows.forEach(p => log(`    • ${p.fullname} [${p.department}]`));
-    monthGroups.push({ monthLabel, abbMonthLabel, rows });
+    monthGroups.push({ monthLabel, abbMonthLabel, key, rows });
     totalMissing += rows.length;
   }
 
@@ -703,7 +703,7 @@ async function main() {
   // Build and upload one PNG per incomplete month
   log('\n[PNG] Rendering per-month images via Puppeteer…');
   for (const group of monthGroups) {
-    const pngFileName = `ค้างส่ง ${group.abbMonthLabel}.png`;
+    const pngFileName = `ค้างส่ง ${group.key}.png`;
     log(`  ↳ ${pngFileName}`);
     const html      = buildHtml(group, runTime);
     const pngBuffer = await renderPng(html);
